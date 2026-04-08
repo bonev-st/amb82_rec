@@ -105,6 +105,6 @@ Standalone test sketches in `tests/`, one per module. Open in Arduino IDE, set W
 | 3 | `test_wifi` | Connect, IP, RSSI, disconnect/reconnect | WiFi network |
 | 4 | `test_ntp` | Time sync, epoch, formatted date/time | WiFi + internet |
 | 5 | `test_camera` | Ch0 H264 + Ch3 RGB, channel start/stop | Board only |
-| 6 | `test_motion` | MotionDetection on Ch3 RGB, getResult() | Board only |
+| 6 | `test_motion` | MotionDetection on Ch3 RGB, getResultCount() | Board only (set correct Sensor Selection in IDE) |
 | 7 | `test_rtsp` | RTSP start/stop, verify with VLC | WiFi network |
 | 8 | `test_mqtt` | Connect, publish motion event with RTSP URL | MQTT broker |

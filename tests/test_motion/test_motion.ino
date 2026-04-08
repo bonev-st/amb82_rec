@@ -2,6 +2,8 @@
  * Test 7: Motion Detection (RTSP Architecture)
  * Verifies: MotionDetection on Ch3 (RGB), configVideo, StreamIO, getResult
  * Needs: Board only — wave hand in front of camera to trigger
+ *
+ * Based on SDK example: MotionDetection/LoopPostProcessing
  */
 
 #include <VideoStream.h>
@@ -9,12 +11,15 @@
 #include <StreamIO.h>
 
 #define SERIAL_BAUD     115200
+#define CH_VIDEO        0           // H264 channel (needed for sensor init)
 #define CH_DETECT       3           // RGB channel for motion detection
-#define TRIGGER_COUNT   3           // Motion regions to trigger
+#define TRIGGER_COUNT   3           // Motion regions to consider triggered
 
+// Match SDK example: both channels configured, globals for all objects
+VideoSetting configV(VIDEO_FHD, 30, VIDEO_H264, 0);
 VideoSetting configMD(VIDEO_VGA, 10, VIDEO_RGB, 0);
-MotionDetection motionDet;
-StreamIO videoToMotion(1, 1);
+MotionDetection MD;
+StreamIO videoStreamerMD(1, 1);
 
 int passCount = 0;
 int failCount = 0;
@@ -37,38 +42,37 @@ void setup() {
     printf(" Test 7: Motion Detection (Ch3 RGB)\n");
     printf("========================================\n\n");
 
-    // Test 1: Configure camera
+    // Configure both channels (Ch0 needed for sensor init)
+    Camera.configVideoChannel(CH_VIDEO, configV);
     Camera.configVideoChannel(CH_DETECT, configMD);
     Camera.videoInit();
     reportTest("Camera videoInit()", true);
 
-    // Test 2: Configure motion detection using configVideo (not configResolution)
-    motionDet.configVideo(configMD);
-    reportTest("motionDet.configVideo()", true);
+    // Configure motion detection — no setTriggerBlockCount (matches SDK example)
+    MD.configVideo(configMD);
+    MD.begin();
+    reportTest("MD.configVideo() + begin()", true);
 
-    motionDet.setTriggerBlockCount(TRIGGER_COUNT);
-    reportTest("setTriggerBlockCount()", true);
-
-    motionDet.begin();
-    reportTest("motionDet.begin()", true);
-
-    // Test 3: Setup StreamIO pipeline
-    videoToMotion.registerInput(Camera.getStream(CH_DETECT));
-    videoToMotion.setStackSize();
-    videoToMotion.registerOutput(motionDet);
-    int pipeResult = videoToMotion.begin();
+    // Connect StreamIO: Camera Ch3 → MD
+    videoStreamerMD.registerInput(Camera.getStream(CH_DETECT));
+    videoStreamerMD.setStackSize();
+    videoStreamerMD.registerOutput(MD);
+    int pipeResult = videoStreamerMD.begin();
     printf("[TEST] StreamIO.begin(): %d (0 = success)\n", pipeResult);
     reportTest("StreamIO pipeline connected", pipeResult == 0);
 
-    // Test 4: Start detection channel
+    // Start detection channel
     Camera.channelBegin(CH_DETECT);
     reportTest("channelBegin(Ch3)", true);
 
-    // Test 5: Initial result check
-    delay(2000);
-    std::vector<MotionDetectionResult> results = motionDet.getResult();
-    printf("[TEST] Initial result: %d regions\n", results.size());
-    reportTest("getResult() returns valid vector", true);
+    // Wait for AE to stabilize and MD background model to build
+    printf("[TEST] Waiting for AE + background model (8s)...\n");
+    delay(8000);
+
+    // Initial result check
+    uint16_t count = MD.getResultCount();
+    printf("[TEST] Initial getResultCount(): %d\n", count);
+    reportTest("getResultCount() works", true);
 
     // Summary
     printf("\n========================================\n");
@@ -79,20 +83,22 @@ void setup() {
 }
 
 void loop() {
-    std::vector<MotionDetectionResult> results = motionDet.getResult();
-    int count = results.size();
+    uint16_t count = MD.getResultCount();
 
     if (count > 0) {
+        std::vector<MotionDetectionResult> results = MD.getResult();
         printf("  MOTION: %d regions", count);
         if (count >= TRIGGER_COUNT) {
             printf(" [TRIGGERED]");
         }
         printf("\n");
-        if (count > 0) {
-            printf("    Region 0: x=[%.2f,%.2f] y=[%.2f,%.2f]\n",
-                   results[0].xMin(), results[0].xMax(),
-                   results[0].yMin(), results[0].yMax());
+        for (int i = 0; i < count && i < 3; i++) {
+            printf("    Region %d: x=[%.2f,%.2f] y=[%.2f,%.2f]\n", i,
+                   results[i].xMin(), results[i].xMax(),
+                   results[i].yMin(), results[i].yMax());
         }
+    } else {
+        printf("  . (no motion)\n");
     }
 
     delay(500);

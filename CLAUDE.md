@@ -85,7 +85,7 @@ V1_CHANNEL=0, V2_CHANNEL=1, V3_CHANNEL=2
 CAM_FPS=30
 ```
 
-**Important:** Motion detection requires **Channel 3 with VIDEO_RGB** format. Do not use H264 for motion detection.
+**Important:** Motion detection requires **Channel 3 with VIDEO_RGB** format. Do not use H264 for motion detection. Channel 3 uses index `3` (not `V3_CHANNEL` which is `2`). You must also configure Channel 0 (H264) for sensor initialization — see Motion Detection section for details.
 
 ### RTSP Streaming
 
@@ -154,6 +154,13 @@ std::vector<MotionDetectionResult> getResult(void);  // returns MotionDetectionR
 ```
 
 **MotionDetectionResult** — has `xMin()`, `xMax()`, `yMin()`, `yMax()` (all return float)
+
+**Important gotchas:**
+- Motion detection uses **Channel 3** (not V3_CHANNEL=2). Channel 3 is a special NN/MD channel with index 3.
+- Channel 3 (RGB) alone cannot initialize the camera sensor. **You must also configure Channel 0** (H264) via `Camera.configVideoChannel(0, configV)` before `Camera.videoInit()`. Channel 0 does NOT need to be started (`channelBegin`) — just configured. Starting it without a consumer causes `CH 0 MMF ENC Queue full` warnings.
+- **Do NOT call `setTriggerBlockCount()` before `begin()`** — it enables `CMD_EIP_SET_MD_OUTPUT` which changes the MD module's internal output mode and causes stale/stuck results.
+- Use **`getResultCount()`** to check for motion, not `getResult().size()`. This matches the SDK examples.
+- Allow **5–8 seconds warm-up** after `channelBegin()` for auto-exposure (AE) to stabilize and the MD background model to build. Without this, you get constant false detections.
 
 ### MP4Recording
 
