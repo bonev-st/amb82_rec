@@ -1,0 +1,88 @@
+# Home Assistant Automations for AMB82 Motion Camera
+# Add these to your Home Assistant automations.yaml or via the UI
+
+# ============================================================
+# MQTT Sensors (add to configuration.yaml)
+# ============================================================
+# mqtt:
+#   sensor:
+#     - name: "Camera Battery"
+#       state_topic: "camera/amb82_cam_01/battery"
+#       value_template: "{{ value_json.battery_pct }}"
+#       unit_of_measurement: "%"
+#       device_class: battery
+#
+#     - name: "Camera Status"
+#       state_topic: "camera/amb82_cam_01/status"
+#       value_template: "{{ value_json.battery_pct }}"
+#       json_attributes_topic: "camera/amb82_cam_01/status"
+#
+#     - name: "Camera Motion"
+#       state_topic: "camera/amb82_cam_01/motion"
+#       value_template: "{{ value_json.motion }}"
+#
+#     - name: "Camera Availability"
+#       state_topic: "camera/amb82_cam_01/availability"
+#
+#   binary_sensor:
+#     - name: "Camera Motion Active"
+#       state_topic: "camera/amb82_cam_01/motion"
+#       value_template: "{{ value_json.motion }}"
+#       payload_on: "true"
+#       payload_off: "false"
+#       device_class: motion
+
+# ============================================================
+# Automation: New Video Clip Notification
+# ============================================================
+- id: camera_new_clip_notification
+  alias: "Camera: New Video Clip"
+  trigger:
+    - platform: mqtt
+      topic: "camera/amb82_cam_01/clip"
+  action:
+    - service: notify.notify
+      data:
+        title: "Motion Detected — New Clip"
+        message: >
+          Camera {{ trigger.payload_json.device }} recorded a
+          {{ trigger.payload_json.duration_s }}s clip.
+          File: {{ trigger.payload_json.filename }}
+          Battery: {{ trigger.payload_json.battery_pct }}%
+
+# ============================================================
+# Automation: Low Battery Alert
+# ============================================================
+- id: camera_low_battery_alert
+  alias: "Camera: Low Battery Alert"
+  trigger:
+    - platform: mqtt
+      topic: "camera/amb82_cam_01/battery"
+  condition:
+    - condition: template
+      value_template: >
+        {{ trigger.payload_json.alert in ['LOW', 'CRITICAL'] }}
+  action:
+    - service: notify.notify
+      data:
+        title: "Camera Battery {{ trigger.payload_json.alert }}"
+        message: >
+          {{ trigger.payload_json.device }} battery is at
+          {{ trigger.payload_json.battery_pct }}%
+          ({{ trigger.payload_json.battery_v }}V).
+          {{ 'Charge immediately!' if trigger.payload_json.alert == 'CRITICAL' else 'Consider charging soon.' }}
+
+# ============================================================
+# Automation: Camera Offline Alert
+# ============================================================
+- id: camera_offline_alert
+  alias: "Camera: Offline Alert"
+  trigger:
+    - platform: mqtt
+      topic: "camera/amb82_cam_01/availability"
+      payload: "offline"
+  action:
+    - service: notify.notify
+      data:
+        title: "Camera Offline"
+        message: "Camera amb82_cam_01 has gone offline. Check battery or WiFi connection."
