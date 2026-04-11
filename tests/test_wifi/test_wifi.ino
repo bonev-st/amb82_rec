@@ -5,12 +5,13 @@
  */
 
 #include <WiFi.h>
+#include <wifi_def.h>
 
 #define SERIAL_BAUD 115200
 
 // ---- CHANGE THESE ----
-#define WIFI_SSID     "YOUR_WIFI_SSID"
-#define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+// #define WIFI_SSID     "YOUR_WIFI_SSID"
+// #define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
 // -----------------------
 
 #define CONNECT_TIMEOUT_MS 15000

@@ -12,12 +12,13 @@
 #include <VideoStream.h>
 #include <RTSP.h>
 #include <StreamIO.h>
+#include <wifi_def.h>
 
 #define SERIAL_BAUD 115200
 
 // ---- CHANGE THESE ----
-#define WIFI_SSID     "YOUR_WIFI_SSID"
-#define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+// #define WIFI_SSID     "xxxx956"
+// #define WIFI_PASSWORD "1RootPass0"
 // -----------------------
 
 #define CH_RTSP 0
@@ -120,8 +121,8 @@ void setup() {
     reportTest("RTSP restart after stop", true);
 
     printf("\n  RTSP URL: %s\n", url);
-    printf("  Streaming for 15 seconds...\n");
-    for (int i = 15; i > 0; i--) {
+    printf("  Streaming for 60 seconds...\n");
+    for (int i = 60; i > 0; i--) {
         printf("  %d...\n", i);
         delay(1000);
     }

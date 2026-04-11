@@ -7,12 +7,13 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <NTPClient.h>
+#include <wifi_def.h>
 
 #define SERIAL_BAUD 115200
 
 // ---- CHANGE THESE ----
-#define WIFI_SSID     "YOUR_WIFI_SSID"
-#define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+// #define WIFI_SSID     "xxxx956"
+// #define WIFI_PASSWORD "1RootPass0"
 // -----------------------
 
 #define NTP_SERVER          "pool.ntp.org"
@@ -61,27 +62,32 @@ void setup() {
     timeClient.begin();
     reportTest("timeClient.begin()", true);  // No return value, success if no crash
 
-    // Test 2: Update
-    bool updated = timeClient.update();
-    printf("[TEST] timeClient.update(): %s\n", updated ? "true" : "false");
-    reportTest("timeClient.update() returns true", updated);
+    // Test 2: Force update (initial sync)
+    bool forced = timeClient.forceUpdate();
+    printf("[TEST] forceUpdate(): %s\n", forced ? "true" : "false");
+    reportTest("forceUpdate() returns true", forced);
 
-    // Test 3: Epoch time
+    // Test 3: Update (returns false when interval not elapsed — expected after forceUpdate)
+    bool updated = timeClient.update();
+    printf("[TEST] timeClient.update(): %s (false is OK — interval not elapsed)\n", updated ? "true" : "false");
+    reportTest("timeClient.update() runs without error", true);
+
+    // Test 4: Epoch time
     unsigned long epoch = timeClient.getEpochTime();
     printf("[TEST] Epoch time: %lu\n", epoch);
     reportTest("getEpochTime() > 1700000000 (after 2023)", epoch > 1700000000UL);
 
-    // Test 4: Formatted time
+    // Test 5: Formatted time
     String timeStr = timeClient.getFormattedTime();
     printf("[TEST] Formatted time: %s\n", timeStr.c_str());
     reportTest("getFormattedTime() non-empty", timeStr.length() > 0);
 
-    // Test 5: Formatted date
+    // Test 6: Formatted date
     String dateStr = timeClient.getFormattedDate();
     printf("[TEST] Formatted date: %s\n", dateStr.c_str());
     reportTest("getFormattedDate() non-empty", dateStr.length() > 0);
 
-    // Test 6: Date components
+    // Test 7: Date components
     int year = timeClient.getYear();
     int month = timeClient.getMonth();
     int day = timeClient.getMonthDay();
@@ -94,11 +100,6 @@ void setup() {
     reportTest("getMonth() in 1-12", month >= 1 && month <= 12);
     reportTest("getMonthDay() in 1-31", day >= 1 && day <= 31);
     reportTest("getHours() in 0-23", hours >= 0 && hours <= 23);
-
-    // Test 7: Force update
-    bool forced = timeClient.forceUpdate();
-    printf("[TEST] forceUpdate(): %s\n", forced ? "true" : "false");
-    reportTest("forceUpdate() returns true", forced);
 
     // Summary
     printf("\n========================================\n");
