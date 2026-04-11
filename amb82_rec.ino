@@ -82,9 +82,11 @@ void setup() {
     // 1. WiFi
     wifiMgr.begin();
 
-    // 2. NTP time sync
+    // 2. NTP time sync (force initial fetch — update() is a no-op before interval elapses)
     timeClient.begin();
-    timeClient.update();
+    if (!timeClient.forceUpdate()) {
+        LOG("[NTP] forceUpdate() failed — time may be inaccurate");
+    }
     LOGF("[NTP] Time: %s\n", timeClient.getFormattedTime().c_str());
 
     // 3. Battery monitor
@@ -123,6 +125,11 @@ void setup() {
 
     // 10. Start motion detection channel (always on)
     Camera.channelBegin(DETECT_CHANNEL);
+
+    // Wait for AE + MD background model to stabilize (prevents false triggers at boot).
+    // Matches SDK pattern — see tests/test_motion/test_motion.ino.
+    LOG("[Setup] Warming up motion detector (8s)...");
+    delay(8000);
 
     // Build RTSP URL for MQTT announcements
     snprintf(rtspUrl, sizeof(rtspUrl), "rtsp://%s:%d",
@@ -174,8 +181,7 @@ void loop() {
 // Motion Detection
 // ============================================================
 bool checkMotion() {
-    std::vector<MotionDetectionResult> results = motionDet.getResult();
-    return ((int)results.size() >= MOTION_DETECT_SENSITIVITY);
+    return motionDet.getResultCount() >= MOTION_DETECT_SENSITIVITY;
 }
 
 // ============================================================

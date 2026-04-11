@@ -2,7 +2,7 @@
 #define MQTT_MANAGER_H
 
 #include <WiFi.h>
-#include <PubSubClient.h>
+#include "src/PubSubClient.h"  // Force SDK-patched version over user-installed stock copy
 #include "config.h"
 
 class MqttManager {
