@@ -1,5 +1,48 @@
 # Findings & Decisions
 
+## 2026-04-11 — Bench deployment analysis (amb82_rec.ino)
+
+### Runtime dependencies inferred from `amb82_rec.ino`
+- **WiFi** (`WiFi.h`, `WiFiUdp.h`) → board needs SSID/password reaching the test LAN
+- **NTP** (`NTPClient.h`) → outbound UDP to `pool.ntp.org`; `forceUpdate()` is
+  called once in `setup()` because `update()` is a no-op before the interval
+- **Camera pipeline** → Channel 0 (FHD H264 @ 30fps, 2 Mbps) configured but
+  *not started* until motion fires; Channel 3 (VGA RGB @ 10fps) always-on for
+  motion detection. Both channels must be `configVideoChannel`'d before
+  `Camera.videoInit()`, otherwise the sensor won't initialise.
+- **RTSP** server bound on `:554`, started/stopped via `rtsp.begin()`/`end()`
+  (the SDK maps these to `RTSPSetStreaming(1/0)` so toggling is cheap).
+- **MotionDetection** on channel index `3` (NOT `V3_CHANNEL`=2), 8 s warm-up
+  needed for AE + background model. `getResultCount() >= 3` is the trigger.
+- **MQTT** via `PubSubClient` — uses the SDK-patched copy under `src/` (512 B
+  max packet) instead of the user-installed stock copy (256 B). Topics:
+  `camera/<id>/status|battery|motion|availability`. LWT is configured.
+- **Battery monitor** reads `A0`; harmless when USB-powered (will report
+  garbage voltage but no functional impact).
+
+### Server-side dependencies (`server/recorder/recorder.py`)
+- Python 3, `paho-mqtt==2.1.0`
+- `ffmpeg` on `$PATH` (used with `-rtsp_transport tcp -c copy` — passthrough,
+  no re-encode, very low CPU)
+- Subscribes to `camera/+/motion`; payload schema is `{"motion": bool, "rtsp": "..."}`
+- Writes clips to `$CLIPS_DIR/<device_id>/<YYYY-MM-DD>/<HH-MM-SS>.mp4`
+- Publishes `camera/<id>/clip` metadata when ffmpeg exits
+
+### Test-system already has
+- Mosquitto 2.0.21, listener `0.0.0.0:1883`, anonymous, no firewall
+  (per CLAUDE.md). This satisfies the broker requirement directly — the
+  bundled `server/docker-compose.yml` is **not** used in this bench test.
+
+### Decisions for this bench test
+| Decision | Rationale |
+|----------|-----------|
+| Skip Docker stack | Existing native broker works; fewer moving parts |
+| Run recorder.py natively in a venv | Same reason; matches "test-system directly" choice |
+| Anonymous MQTT | Matches existing broker config; LAN-only |
+| `MQTT_BROKER = sbbu01.local` | Resolves via mDNS; fall back to IPv4 if needed |
+| Untrack `config.h` before editing | It currently contains placeholders, but real creds must not be committed |
+| Leave battery code enabled | Code path is harmless on USB; disabling is extra churn |
+
 ## Requirements
 - Platform: Ameba AMB82 Mini (RTL8735B, ARM Cortex-M33)
 - Toolchain: Arduino IDE with Ameba Arduino SDK (ambpro2_arduino)

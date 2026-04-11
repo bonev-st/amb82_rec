@@ -1,5 +1,33 @@
 # Progress Log
 
+## Session: 2026-04-11 — Bench deployment planning
+
+- Read `amb82_rec.ino`, `config.h`, manager headers, `server/docker-compose.yml`,
+  `server/recorder/recorder.py`, `server/recorder/Dockerfile`,
+  `server/mosquitto/config/mosquitto.conf`.
+- Inferred runtime dependencies (logged in `findings.md`).
+- Asked user 8 clarifying questions; got answers:
+  native Mosquitto, native recorder, no HA, USB power, Arduino IDE flashing,
+  default device id, clips → `~/amb82_clips/`. Wi-Fi creds provided OOB.
+- Wrote 7-phase deployment plan into `task_plan.md` (pre-flight → infra →
+  config → build/flash → bring-up → end-to-end → teardown).
+- Flagged: `config.h` is git-tracked; should be untracked before adding real
+  creds. PubSubClient include path under `src/` is intentional.
+- Next action: execute Phase 2 (test-system infra) when user gives the go-ahead.
+
+### Phase 2 execution (same session)
+- Verified mosquitto active, port 1883 listening, ffmpeg + python3 already on PATH.
+- Anonymous `mosquitto_pub` to 127.0.0.1 succeeded.
+- `scp` was rejected by user; switched to `ssh ... cat > file` for file transfer.
+  **Lesson:** prefer ssh-stdin file transfer on this machine instead of scp.
+- `python3 -m venv` initially failed (`ensurepip` missing); user installed
+  `python3.13-venv` + `pipx`. Recreated venv successfully, `paho-mqtt==2.1.0` installed.
+- Wrote `~/.config/systemd/user/amb82-recorder.service` (Type=simple, Restart=on-failure,
+  env vars baked in: broker 127.0.0.1, anon, CLIPS_DIR=%h/amb82_clips).
+- `loginctl enable-linger`, `systemctl --user enable --now amb82-recorder.service`.
+- Service active, journal shows `Connected to MQTT broker (rc=Success)` and
+  `Subscribed to camera/+/motion`. Phase 2 complete.
+
 ## Session: 2026-04-06
 
 ### Phase 1: Research & Architecture Design

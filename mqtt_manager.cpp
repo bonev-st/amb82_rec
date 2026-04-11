@@ -3,6 +3,14 @@
 void MqttManager::begin(WiFiClient& wifiClient) {
     _client.setClient(wifiClient);
     _client.setServer(MQTT_BROKER, MQTT_PORT);
+    // keepAlive=0 → per MQTT 3.1.1 [MQTT-3.1.2-25], broker must not drop the
+    // client for keepalive timeout. This is critical on Ameba because
+    // PubSubClient::loop() blocks the main task indefinitely on this SDK's
+    // WiFiClient implementation — we cannot call it from the main loop
+    // without freezing motion detection. Instead we skip loop() entirely,
+    // rely on keepAlive=0 to keep the broker from kicking us, and
+    // publishMotionEvent() force-reconnects on demand if TCP breaks anyway.
+    _client.setKeepAlive(0);
     connect();
 }
 
@@ -61,7 +69,17 @@ void MqttManager::publishStatus(int batteryPct, float batteryV, int rssi) {
 }
 
 void MqttManager::publishMotionEvent(bool motionActive, const char* rtspUrl) {
-    if (!_client.connected()) return;
+    // Motion events must not be dropped. If the connection is down, force an
+    // immediate reconnect attempt (bypassing the backoff gate in
+    // ensureConnected) so the recorder never misses a start/stop.
+    if (!_client.connected()) {
+        LOG("[MQTT] motion publish: not connected, forcing reconnect...");
+        _lastReconnectAttempt = millis();
+        if (!connect()) {
+            LOG("[MQTT] motion publish: reconnect failed — event lost");
+            return;
+        }
+    }
 
     char payload[256];
     if (motionActive && rtspUrl != NULL) {

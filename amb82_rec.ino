@@ -73,73 +73,78 @@ unsigned long lastStatusTime = 0;
 // Setup
 // ============================================================
 void setup() {
+    // LED pin first, matching test_motion.ino setup order
+    pinMode(REC_LED_PIN, OUTPUT);
+    digitalWrite(REC_LED_PIN, LOW);
+
     Serial.begin(SERIAL_BAUD);
-    delay(1000);
+    delay(2000);
     LOG("\n========================================");
     LOG(" AMB82 Motion Camera — RTSP Streamer");
     LOG("========================================");
 
-    // 1. WiFi
+    // ----------------------------------------------------------
+    // Phase A — WiFi first
+    // RTSP server binds to a network socket; rtsp.begin() must NOT be
+    // called before WiFi is up or the sketch hangs.
+    // Matches SDK MotionDetection/LoopPostProcessing.ino ordering.
+    // ----------------------------------------------------------
     wifiMgr.begin();
 
-    // 2. NTP time sync (force initial fetch — update() is a no-op before interval elapses)
     timeClient.begin();
     if (!timeClient.forceUpdate()) {
         LOG("[NTP] forceUpdate() failed — time may be inaccurate");
     }
     LOGF("[NTP] Time: %s\n", timeClient.getFormattedTime().c_str());
 
-    // 3. Battery monitor
-    batteryMon.begin();
-
-    // 4. MQTT
-    mqttMgr.begin(mqttWifiClient);
-
-    // 5. Configure video channels
+    // ----------------------------------------------------------
+    // Phase B — Camera + RTSP + Motion Detection
+    // BOTH Ch0 (H264) and Ch3 (RGB) are configured and started once at
+    // boot and run continuously. Dynamically toggling Ch0/RTSP between
+    // motion events produced RTSP clips that decoded as a static image
+    // (the re-started Ch0 encoder emitted one cached sample). Keeping
+    // Ch0 + RTSP + Ch0→RTSP pipeline alive permanently matches the SDK
+    // example and gives a clean H264 stream on every motion event.
+    // ----------------------------------------------------------
     configStream.setBitrate(RTSP_BITRATE);
     Camera.configVideoChannel(RTSP_CHANNEL, configStream);
     Camera.configVideoChannel(DETECT_CHANNEL, configMD);
     Camera.videoInit();
 
-    // 6. Configure RTSP (but don't start yet — wait for motion)
+    // RTSP server + Ch0 → RTSP pipeline (WiFi is already up).
     rtsp.configVideo(configStream);
-
-    // 7. Wire RTSP pipeline (Camera Ch0 → RTSP)
+    rtsp.begin();
     videoToRtsp.registerInput(Camera.getStream(RTSP_CHANNEL));
     videoToRtsp.registerOutput(rtsp);
     if (videoToRtsp.begin() != 0) {
         LOG("[Pipeline] ERROR: videoToRtsp connection failed");
     }
+    Camera.channelBegin(RTSP_CHANNEL);
 
-    // 8. Configure motion detection
+    // Motion detection pipeline on Ch3.
     motionDet.configVideo(configMD);
     motionDet.begin();
-
-    // 9. Wire motion pipeline (Camera Ch3 → MotionDetection)
     videoToMotion.registerInput(Camera.getStream(DETECT_CHANNEL));
     videoToMotion.setStackSize();
     videoToMotion.registerOutput(motionDet);
     if (videoToMotion.begin() != 0) {
         LOG("[Pipeline] ERROR: videoToMotion connection failed");
     }
-
-    // 10. Start motion detection channel (always on)
     Camera.channelBegin(DETECT_CHANNEL);
 
-    // Wait for AE + MD background model to stabilize (prevents false triggers at boot).
-    // Matches SDK pattern — see tests/test_motion/test_motion.ino.
     LOG("[Setup] Warming up motion detector (8s)...");
     delay(8000);
+    LOGF("[Setup] Initial MD count: %u\n", motionDet.getResultCount());
 
-    // Build RTSP URL for MQTT announcements
-    snprintf(rtspUrl, sizeof(rtspUrl), "rtsp://%s:%d",
-             WiFi.localIP().get_address(), rtsp.getPort());
+    // ----------------------------------------------------------
+    // Phase C — Battery + MQTT (after camera/RTSP are live)
+    // ----------------------------------------------------------
+    batteryMon.begin();
+    mqttMgr.begin(mqttWifiClient);
 
     LOG("[Setup] Complete — entering motion detection loop");
-    LOGF("[Setup] RTSP URL (when streaming): %s\n", rtspUrl);
     LOG("========================================\n");
 
-    // Publish initial status
     mqttMgr.publishStatus(batteryMon.getPercentage(), batteryMon.getVoltage(), wifiMgr.getRSSI());
 }
 
@@ -149,31 +154,28 @@ void setup() {
 void loop() {
     unsigned long now = millis();
 
-    // --- Connectivity maintenance ---
-    wifiMgr.ensureConnected();
-    mqttMgr.ensureConnected();
-    mqttMgr.loop();
-
-    // --- Battery monitoring ---
-    batteryMon.update();
-    if (batteryMon.hasNewAlert()) {
-        mqttMgr.publishBatteryAlert(
-            batteryMon.getAlertLevel(),
-            batteryMon.getPercentage(),
-            batteryMon.getVoltage()
-        );
-    }
-
-    // --- Periodic status ---
-    if (now - lastStatusTime >= MQTT_STATUS_INTERVAL_MS) {
-        lastStatusTime = now;
-        mqttMgr.publishStatus(batteryMon.getPercentage(), batteryMon.getVoltage(), wifiMgr.getRSSI());
-    }
-
-    // --- Motion detection state machine ---
+    // Motion detection state machine — always first, never blocked.
     bool motionDetected = checkMotion();
     handleStreamingState(motionDetected, now);
 
+    // IMPORTANT: mqttMgr.loop() and mqttMgr.ensureConnected() are
+    // DELIBERATELY absent from the main loop. On the Ameba-patched
+    // PubSubClient / WiFiClient stack these calls block the main task
+    // indefinitely (~45 s at a time) which freezes motion detection.
+    // Instead:
+    //   - MqttManager::begin() calls setKeepAlive(0), so the broker never
+    //     disconnects us for keepalive timeout.
+    //   - publishMotionEvent() has its own force-reconnect path
+    //     (mqtt_manager.cpp) and is the only code that touches MQTT state
+    //     from the loop. Motion start/stop events reconnect on demand.
+    //
+    // WiFi maintenance is safe here because WifiManager::ensureConnected()
+    // is a non-blocking state machine (wifi_manager.cpp Edit 3).
+    if (streamState == STATE_IDLE) {
+        wifiMgr.ensureConnected();
+    }
+
+    (void)now;
     delay(100);
 }
 
@@ -181,7 +183,19 @@ void loop() {
 // Motion Detection
 // ============================================================
 bool checkMotion() {
-    return motionDet.getResultCount() >= MOTION_DETECT_SENSITIVITY;
+    uint16_t count = motionDet.getResultCount();
+    static uint16_t lastCount = 0xFFFF;
+    static unsigned long lastPrint = 0;
+    unsigned long now = millis();
+    // Log on every count change, and at least every 500 ms regardless,
+    // so the serial monitor shows continuous proof the MD pipeline is
+    // alive — matches tests/test_motion/test_motion.ino's UX.
+    if (count != lastCount || now - lastPrint >= 500) {
+        LOGF("[MD] regions=%u%s\n", count, count ? "" : " .");
+        lastCount = count;
+        lastPrint = now;
+    }
+    return count >= MOTION_DETECT_SENSITIVITY;
 }
 
 // ============================================================
@@ -221,35 +235,26 @@ void handleStreamingState(bool motionDetected, unsigned long now) {
 // ============================================================
 // RTSP Stream Control
 // ============================================================
+// Ch0, RTSP server, and Ch0→RTSP pipeline run continuously from boot
+// (see setup()). These functions are pure state-machine transitions —
+// they publish the motion event, drive the LED, and track duration.
+// The RTSP stream is *always* available on :554.
 void startStreaming() {
     streamStartTime = millis();
 
-    // Update RTSP URL in case IP changed after reconnect
+    // Build RTSP URL (IP may have changed after reconnect).
     snprintf(rtspUrl, sizeof(rtspUrl), "rtsp://%s:%d",
              WiFi.localIP().get_address(), rtsp.getPort());
+    LOGF("[RTSP] Motion-start: %s\n", rtspUrl);
 
-    LOGF("[RTSP] Starting stream: %s\n", rtspUrl);
-
-    // Start high-res video channel and RTSP server
-    Camera.channelBegin(RTSP_CHANNEL);
-    rtsp.begin();
-
-    // Notify server to start recording
     mqttMgr.publishMotionEvent(true, rtspUrl);
-
-    LOG("[RTSP] Stream active");
+    digitalWrite(REC_LED_PIN, HIGH);
 }
 
 void stopStreaming() {
     unsigned long durationMs = millis() - streamStartTime;
-    LOGF("[RTSP] Stopping after %.1f seconds\n", durationMs / 1000.0f);
+    LOGF("[RTSP] Motion-stop after %.1f seconds\n", durationMs / 1000.0f);
 
-    // Stop RTSP server and high-res channel (save power)
-    rtsp.end();
-    Camera.channelEnd(RTSP_CHANNEL);
-
-    // Notify server to stop recording
     mqttMgr.publishMotionEvent(false, NULL);
-
-    LOG("[RTSP] Stream stopped");
+    digitalWrite(REC_LED_PIN, LOW);
 }

@@ -14,6 +14,8 @@ public:
 private:
     bool connect();
     unsigned long _lastReconnectAttempt = 0;
+    bool _attemptInFlight = false;
+    unsigned long _attemptStart = 0;
 };
 
 #endif // WIFI_MANAGER_H

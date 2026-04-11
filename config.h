@@ -10,18 +10,18 @@
 // ============================================================
 // WiFi Configuration
 // ============================================================
-#define WIFI_SSID           "YOUR_WIFI_SSID"        // <-- CHANGE THIS
-#define WIFI_PASSWORD       "YOUR_WIFI_PASSWORD"    // <-- CHANGE THIS
+#define WIFI_SSID           "xxxx956"
+#define WIFI_PASSWORD       "1RootPass0"
 #define WIFI_CONNECT_TIMEOUT_MS   15000
 #define WIFI_RECONNECT_INTERVAL_MS 10000
 
 // ============================================================
 // MQTT Configuration
 // ============================================================
-#define MQTT_BROKER         "192.168.1.100"         // <-- CHANGE THIS
+#define MQTT_BROKER         "192.168.2.143"
 #define MQTT_PORT           1883
-#define MQTT_USER           "mqtt_user"             // <-- CHANGE THIS
-#define MQTT_PASSWORD       "mqtt_password"         // <-- CHANGE THIS
+#define MQTT_USER           ""
+#define MQTT_PASSWORD       ""
 
 // MQTT Topics
 #define MQTT_TOPIC_STATUS   "camera/" DEVICE_ID "/status"
@@ -52,7 +52,7 @@
 #define DETECT_CHANNEL      3              // SDK requires channel 3 for RGB motion detection
 #define DETECT_FPS          10
 #define DETECT_CODEC        VIDEO_RGB      // Must be RGB for MotionDetection
-#define MOTION_DETECT_SENSITIVITY  3       // Trigger when >= N motion regions detected
+#define MOTION_DETECT_SENSITIVITY  2       // Trigger when >= N connected motion regions detected
 #define MOTION_POST_ROLL_MS        10000   // Stream 10 seconds after motion ends
 
 // ============================================================
@@ -60,6 +60,14 @@
 // ============================================================
 #define RTSP_CHANNEL        0
 #define RTSP_BITRATE        (2 * 1024 * 1024)  // 2 Mbps recommended for WiFi
+
+// ============================================================
+// Recording Indicator LED
+// ============================================================
+// Use LED_G (on-board green LED on AMB82 Mini, Arduino pin 24 = PE_6).
+// Passing PE_6 directly does not work — pinMode/digitalWrite expect the
+// Arduino pin index from the variant table, not the raw mbed pin enum.
+#define REC_LED_PIN         LED_G
 
 // ============================================================
 // NTP
