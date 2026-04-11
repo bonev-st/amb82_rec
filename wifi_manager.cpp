@@ -17,7 +17,7 @@ bool WifiManager::connect() {
         delay(500);
     }
 
-    LOGF("[WiFi] Connected, IP: %s, RSSI: %d dBm\n",
+    LOGF("[WiFi] Connected, IP: %s, RSSI: %ld dBm\n",
          WiFi.localIP().get_address(), WiFi.RSSI());
     return true;
 }
