@@ -312,3 +312,57 @@ void analogReadResolution(int res);  // default 10-bit (0-1023)
 **AMB82 Mini ADC pins:** A0 (PF_0), A1 (PF_1), A2 (PF_2), A4 (PA_0), A5 (PA_1), A6 (PA_2), A7 (PA_3)
 **Note:** No A3 pin available.
 **Built-in LED:** `LED_BUILTIN` (PF_9, blue), **Button:** `PUSH_BTN` (PF_10)
+
+### Linux Server (for tests)
+## Access to remote Linux test machine
+System: Debian 13 (aarch64)
+Use the SSH alias configured locally on the developer machine:
+
+```bash
+ssh test-system
+```
+#### MQTT Broker (Mosquitto)
+Installed and running on the Debian host for `tests/test_mqtt/test_mqtt.ino` and
+any other firmware test that needs a broker.
+
+- Service: `mosquitto.service` (active, enabled at boot)
+- Package: `mosquitto` + `mosquitto-clients` (v2.0.21)
+- Listener: `0.0.0.0:1883`, anonymous allowed (LAN-only test setup)
+- LAN-exposing config: `/etc/mosquitto/conf.d/local.conf`
+  ```
+  listener 1883 0.0.0.0
+  allow_anonymous true
+  ```
+- Main config: `/etc/mosquitto/mosquitto.conf` (distro defaults, includes `conf.d/`)
+- Firewall: none active (no ufw, no iptables rules)
+
+**Point firmware tests at it:** set `MQTT_BROKER "sbbu01.local"` and leave
+`MQTT_USER`/`MQTT_PASS` empty. Example (`tests/test_mqtt/test_mqtt.ino`):
+```c
+#define MQTT_BROKER "sbbu01.local"
+#define MQTT_PORT   1883
+#define MQTT_USER   ""
+#define MQTT_PASS   ""
+```
+
+**Watch traffic from the host** (useful for verifying firmware publishes):
+```bash
+ssh test-system "mosquitto_sub -h 127.0.0.1 -t '#' -v"
+# Or filter to the test topics:
+ssh test-system "mosquitto_sub -h 127.0.0.1 -t 'amb82_test/#' -v"
+```
+
+**Inject test messages from the host:**
+```bash
+ssh test-system "mosquitto_pub -h 127.0.0.1 -t amb82_test/cmd -m hello"
+```
+
+**Service ops:**
+```bash
+sudo systemctl {status,restart,stop,start} mosquitto
+sudo journalctl -u mosquitto -f
+```
+
+Note: `allow_anonymous true` is a LAN test convenience. For the production
+recorder pipeline (`server/` stack), switch to a `password_file` and set
+`allow_anonymous false`.

@@ -7,11 +7,11 @@ Motion-triggered RTSP video streamer for the Ameba AMB82 Mini camera board. Dete
 ```
 AMB82 Mini                              Linux Server
 +-----------------------+               +---------------------------+
-| Ch3 (VGA,RGB,10fps)  |               |                           |
+| Ch3 (VGA,RGB,10fps)   |               |                           |
 |   -> MotionDetection  |--MQTT-------->| Mosquitto (MQTT broker)   |
-|      (always on)      |  start/stop  |                           |
+|      (always on)      |  start/stop   |                           |
 |                       |               | recorder.py               |
-| Ch0 (FHD,H264,30fps) |               |   subscribes to MQTT      |
+| Ch0 (FHD,H264,30fps)  |               |   subscribes to MQTT      |
 |   -> RTSP server <----+--RTSP pull----+   spawns FFmpeg on start  |
 |      (on demand)      |  rtsp://:554  |   kills FFmpeg on stop    |
 |                       |               |   saves MP4 clips         |
@@ -98,6 +98,25 @@ server/clips/
 
 Standalone test sketches in `tests/`, one per module. Open in Arduino IDE, set WiFi credentials where needed, flash, and watch Serial Monitor at 115200 baud.
 
+**WiFi credentials** — test sketches that need WiFi (`test_wifi`, `test_ntp`, `test_rtsp`, `test_mqtt`) include a shared header `wifi_def.h` rather than hardcoding SSID/password in each sketch. It lives as a user library at:
+
+```
+C:\Work\Arduino\libraries\wifi_def\wifi_def.h
+```
+
+with contents:
+```c
+#ifndef WIFI_DEF_H
+#define WIFI_DEF_H
+
+#define WIFI_SSID     "your-ssid"
+#define WIFI_PASSWORD "your-password"
+
+#endif
+```
+
+Edit that file once and every test sketch picks up the new credentials. The file is intentionally **not** checked into this repo — keep real credentials out of version control.
+
 | # | Sketch | What it tests | Needs |
 |---|--------|---------------|-------|
 | 1 | `test_serial` | Serial, printf, LOG/LOGF macros, LED | Board only |
@@ -108,3 +127,65 @@ Standalone test sketches in `tests/`, one per module. Open in Arduino IDE, set W
 | 6 | `test_motion` | MotionDetection on Ch3 RGB, getResultCount() | Board only (set correct Sensor Selection in IDE) |
 | 7 | `test_rtsp` | RTSP start/stop, verify with VLC | WiFi network |
 | 8 | `test_mqtt` | Connect, publish motion event with RTSP URL | MQTT broker |
+
+### MQTT broker for `test_mqtt`
+
+The `test_mqtt` sketch needs a reachable MQTT broker. For bench testing you can
+point it at the full `server/` Docker stack, at `test.mosquitto.org:1883`, or at
+a bare Mosquitto install on any LAN machine.
+
+**Bare Mosquitto on Debian/Ubuntu (ARM64 or x86_64):**
+```bash
+sudo apt update
+sudo apt install -y mosquitto mosquitto-clients
+
+sudo tee /etc/mosquitto/conf.d/local.conf >/dev/null <<'EOF'
+listener 1883 0.0.0.0
+allow_anonymous true
+EOF
+
+sudo systemctl enable --now mosquitto
+sudo systemctl restart mosquitto
+
+# Verify listener is on the LAN interface (not just localhost)
+ss -tln | grep 1883
+```
+
+If `ufw` is active, also open the port:
+```bash
+sudo ufw allow 1883/tcp
+```
+
+**Bare Mosquitto on Windows 11:**
+1. Install from https://mosquitto.org/download/
+2. Edit `C:\Program Files\mosquitto\mosquitto.conf` (as Administrator) and append:
+   ```
+   listener 1883 0.0.0.0
+   allow_anonymous true
+   ```
+3. Start the service and open the firewall (Admin PowerShell):
+   ```powershell
+   net start mosquitto
+   New-NetFirewallRule -DisplayName "Mosquitto MQTT" -Direction Inbound -Protocol TCP -LocalPort 1883 -Action Allow
+   ```
+
+**Point the sketch at your broker** — in `tests/test_mqtt/test_mqtt.ino`:
+```c
+#define MQTT_BROKER "192.168.x.y"   // Your broker LAN IP
+#define MQTT_PORT   1883
+#define MQTT_USER   ""              // anonymous
+#define MQTT_PASS   ""
+```
+
+**Verify the roundtrip from any LAN machine with `mosquitto-clients`:**
+```bash
+# Terminal A — watch everything the firmware publishes
+mosquitto_sub -h 192.168.x.y -t 'amb82_test/#' -v
+
+# Terminal B — inject a command to trigger the sketch's subscribe callback
+mosquitto_pub -h 192.168.x.y -t amb82_test/cmd -m 'hello'
+```
+
+> `allow_anonymous true` is intended for LAN bench testing only. For the
+> production recorder pipeline under `server/`, use a `password_file` and set
+> `allow_anonymous false`.
