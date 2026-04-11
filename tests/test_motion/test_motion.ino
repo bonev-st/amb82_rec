@@ -15,6 +15,8 @@
 #define CH_DETECT       3           // RGB channel for motion detection
 #define TRIGGER_COUNT   3           // Motion regions to consider triggered
 
+#define REC_LED_PIN     LED_G
+
 // Match SDK example: both channels configured, globals for all objects
 VideoSetting configV(VIDEO_FHD, 30, VIDEO_H264, 0);
 VideoSetting configMD(VIDEO_VGA, 10, VIDEO_RGB, 0);
@@ -35,6 +37,9 @@ void reportTest(const char* name, bool passed) {
 }
 
 void setup() {
+    pinMode(REC_LED_PIN, OUTPUT);
+    digitalWrite(REC_LED_PIN, LOW);
+
     Serial.begin(SERIAL_BAUD);
     delay(2000);
 
@@ -86,6 +91,8 @@ void loop() {
     uint16_t count = MD.getResultCount();
 
     if (count > 0) {
+		digitalWrite(REC_LED_PIN, HIGH);
+
         std::vector<MotionDetectionResult> results = MD.getResult();
         printf("  MOTION: %d regions", count);
         if (count >= TRIGGER_COUNT) {
@@ -98,7 +105,9 @@ void loop() {
                    results[i].yMin(), results[i].yMax());
         }
     } else {
-        printf("  . (no motion)\n");
+		digitalWrite(REC_LED_PIN, LOW);
+
+		printf("  . (no motion)\n");
     }
 
     delay(500);
