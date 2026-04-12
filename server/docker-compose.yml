@@ -29,6 +29,7 @@ services:
       MQTT_TOPIC: "camera/+/motion"
       CLIPS_DIR: /clips
       MAX_DURATION: "300"        # Safety cap: 5 minutes max per clip
+      TZ: "Europe/Sofia"         # Timezone for clip filenames and timestamps
     volumes:
       - ./clips:/clips
 

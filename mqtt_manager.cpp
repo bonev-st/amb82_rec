@@ -1,16 +1,26 @@
 #include "mqtt_manager.h"
 
-void MqttManager::begin(WiFiClient& wifiClient) {
+MqttManager* MqttManager::_instance = nullptr;
+
+void MqttManager::begin(WiFiClient& wifiClient, NTPClient& timeClient) {
+    _timeClient = &timeClient;
+    _instance = this;
+
     _client.setClient(wifiClient);
     _client.setServer(MQTT_BROKER, MQTT_PORT);
+    // No setCallback on main client — calling loop() on Ameba's WiFiClient
+    // blocks indefinitely and corrupts the connection for subsequent publishes.
     // keepAlive=0 → per MQTT 3.1.1 [MQTT-3.1.2-25], broker must not drop the
-    // client for keepalive timeout. This is critical on Ameba because
-    // PubSubClient::loop() blocks the main task indefinitely on this SDK's
-    // WiFiClient implementation — we cannot call it from the main loop
-    // without freezing motion detection. Instead we skip loop() entirely,
-    // rely on keepAlive=0 to keep the broker from kicking us, and
-    // publishMotionEvent() force-reconnects on demand if TCP breaks anyway.
+    // client for keepalive timeout. publishMotionEvent() force-reconnects on
+    // demand if TCP breaks.
     _client.setKeepAlive(0);
+
+    // Pull config BEFORE connecting the main client — uses a separate,
+    // disposable WiFiClient + PubSubClient so the main client stays pristine.
+    unsigned long t0 = millis();
+    pullConfig();
+    LOGF("[MQTT] pullConfig took %lu ms\n", millis() - t0);
+    _lastConfigCheck = millis();  // reset poll timer so checkConfig waits a full interval
     connect();
 }
 
@@ -34,6 +44,90 @@ bool MqttManager::connect() {
         LOGF("[MQTT] Connection failed, rc=%d\n", _client.state());
     }
     return connected;
+}
+
+void MqttManager::pullConfig() {
+    // Read the retained config message using a SEPARATE, disposable MQTT
+    // connection.  Calling subscribe()/loop() on the main PubSubClient
+    // corrupts the Ameba WiFiClient state and breaks subsequent publishes.
+    // A throwaway client avoids that entirely — it connects, grabs the
+    // retained message, disconnects, and goes out of scope.
+    WiFiClient cfgWifi;
+    PubSubClient cfgClient;
+    cfgClient.setClient(cfgWifi);
+    cfgClient.setServer(MQTT_BROKER, MQTT_PORT);
+    cfgClient.setCallback(mqttCallback);
+    cfgClient.setKeepAlive(15);
+    cfgClient.setSocketTimeout(2);
+
+    if (!cfgClient.connect(DEVICE_ID "_cfg")) {
+        LOG("[MQTT] pullConfig: connect failed");
+        return;
+    }
+
+    cfgClient.subscribe(MQTT_TOPIC_CONFIG);
+
+    // Need 2+ loop() calls: one for SUBACK, one for retained PUBLISH.
+    for (int i = 0; i < 3; i++) {
+        cfgClient.loop();
+        delay(50);
+    }
+
+    cfgClient.disconnect();
+}
+
+void MqttManager::checkConfig() {
+    // Periodic config poll — call from main loop during STATE_IDLE only.
+    // Creates a disposable MQTT connection to read the retained config
+    // message, so runtime timezone changes via MQTT take effect within
+    // one polling interval without needing a reboot.
+    unsigned long now = millis();
+    if (now - _lastConfigCheck < 60000) return;  // once per minute
+    _lastConfigCheck = now;
+    LOG("[MQTT] Checking for config update...");
+    pullConfig();
+}
+
+void MqttManager::mqttCallback(char* topic, uint8_t* payload, unsigned int length) {
+    if (!_instance || !_instance->_timeClient) return;
+    if (strcmp(topic, MQTT_TOPIC_CONFIG) != 0) return;
+
+    // Parse timezone_offset from JSON payload.
+    // Expected format: {"timezone_offset": 7200}
+    // Use strstr + strtol for robustness to whitespace/key ordering.
+    char buf[128];
+    unsigned int copyLen = (length < sizeof(buf) - 1) ? length : sizeof(buf) - 1;
+    memcpy(buf, payload, copyLen);
+    buf[copyLen] = '\0';
+
+    const char* key = strstr(buf, "\"timezone_offset\"");
+    if (!key) {
+        LOGF("[MQTT] Config: no timezone_offset in payload: %s\n", buf);
+        return;
+    }
+
+    // Skip past the key and colon
+    const char* colon = strchr(key, ':');
+    if (!colon) return;
+
+    char* end = nullptr;
+    long offset = strtol(colon + 1, &end, 10);
+    if (end == colon + 1) {
+        LOGF("[MQTT] Config: failed to parse timezone_offset value\n");
+        return;
+    }
+
+    _instance->_timeClient->setTimeOffset((int)offset);
+    LOGF("[MQTT] Config: timezone_offset=%ld (UTC%+.1fh)\n", offset, offset / 3600.0f);
+}
+
+unsigned long MqttManager::getEpochTime() {
+    if (!_timeClient) return millis() / 1000;
+    unsigned long epoch = _timeClient->getEpochTime();
+    // Sanity check: if NTP hasn't synced yet, epoch will be near zero.
+    // 1704067200 = 2024-01-01T00:00:00Z
+    if (epoch < 1704067200UL) return millis() / 1000;
+    return epoch;
 }
 
 bool MqttManager::ensureConnected() {
@@ -63,9 +157,9 @@ void MqttManager::publishStatus(int batteryPct, float batteryV, int rssi) {
 
     char payload[256];
     snprintf(payload, sizeof(payload),
-        "{\"device\":\"%s\",\"battery_pct\":%d,\"battery_v\":%.2f,"
+        "{\"device\":\"%s\",\"timestamp\":%lu,\"battery_pct\":%d,\"battery_v\":%.2f,"
         "\"rssi\":%d,\"uptime\":%lu}",
-        DEVICE_ID, batteryPct, batteryV, rssi, millis() / 1000);
+        DEVICE_ID, getEpochTime(), batteryPct, batteryV, rssi, millis() / 1000);
 
     _client.publish(MQTT_TOPIC_STATUS, payload);
     LOGF("[MQTT] Status: %s\n", payload);
@@ -88,11 +182,11 @@ void MqttManager::publishMotionEvent(bool motionActive, const char* rtspUrl) {
     if (motionActive && rtspUrl != NULL) {
         snprintf(payload, sizeof(payload),
             "{\"device\":\"%s\",\"motion\":true,\"rtsp\":\"%s\",\"timestamp\":%lu}",
-            DEVICE_ID, rtspUrl, millis() / 1000);
+            DEVICE_ID, rtspUrl, getEpochTime());
     } else {
         snprintf(payload, sizeof(payload),
             "{\"device\":\"%s\",\"motion\":false,\"timestamp\":%lu}",
-            DEVICE_ID, millis() / 1000);
+            DEVICE_ID, getEpochTime());
     }
 
     _client.publish(MQTT_TOPIC_MOTION, payload);
@@ -111,8 +205,9 @@ void MqttManager::publishBatteryAlert(const char* level, int percentage, float v
 
     char payload[256];
     snprintf(payload, sizeof(payload),
-        "{\"device\":\"%s\",\"alert\":\"%s\",\"battery_pct\":%d,\"battery_v\":%.2f}",
-        DEVICE_ID, level, percentage, voltage);
+        "{\"device\":\"%s\",\"alert\":\"%s\",\"battery_pct\":%d,\"battery_v\":%.2f,"
+        "\"timestamp\":%lu}",
+        DEVICE_ID, level, percentage, voltage, getEpochTime());
 
     _client.publish(MQTT_TOPIC_BATTERY, payload, true);
     LOGF("[MQTT] Battery alert: %s (%d%%)\n", level, percentage);

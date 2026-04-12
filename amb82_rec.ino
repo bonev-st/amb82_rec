@@ -92,10 +92,15 @@ void setup() {
     wifiMgr.begin();
 
     timeClient.begin();
-    if (!timeClient.forceUpdate()) {
-        LOG("[NTP] forceUpdate() failed — time may be inaccurate");
+    for (int attempt = 1; attempt <= 5; attempt++) {
+        if (timeClient.forceUpdate()) {
+            LOGF("[NTP] Synced: %s (attempt %d)\n",
+                 timeClient.getFormattedTime().c_str(), attempt);
+            break;
+        }
+        LOGF("[NTP] Sync failed (attempt %d/5)\n", attempt);
+        if (attempt < 5) delay(2000);
     }
-    LOGF("[NTP] Time: %s\n", timeClient.getFormattedTime().c_str());
 
     // ----------------------------------------------------------
     // Phase B — Camera + RTSP + Motion Detection
@@ -140,7 +145,7 @@ void setup() {
     // Phase C — Battery + MQTT (after camera/RTSP are live)
     // ----------------------------------------------------------
     batteryMon.begin();
-    mqttMgr.begin(mqttWifiClient);
+    mqttMgr.begin(mqttWifiClient, timeClient);
 
     LOG("[Setup] Complete — entering motion detection loop");
     LOG("========================================\n");
@@ -194,6 +199,8 @@ void loop() {
     // is a non-blocking state machine (wifi_manager.cpp Edit 3).
     if (streamState == STATE_IDLE) {
         wifiMgr.ensureConnected();
+        timeClient.update();    // re-sync NTP (self-throttled to once per hour)
+        mqttMgr.checkConfig();  // poll for timezone/config updates (once per minute)
     }
 
     delay(100);

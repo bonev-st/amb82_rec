@@ -366,3 +366,22 @@ sudo journalctl -u mosquitto -f
 Note: `allow_anonymous true` is a LAN test convenience. For the production
 recorder pipeline (`server/` stack), switch to a `password_file` and set
 `allow_anonymous false`.
+
+#### Recorder (recorder.py)
+Runs on the Debian host as a user-level systemd service.
+
+- Service: `amb82-recorder.service` (user service under `arduino` user)
+- Install path: `/home/arduino/amb82_recorder/`
+- Python venv: `/home/arduino/amb82_recorder/.venv/`
+- Clips path: `/home/arduino/amb82_clips/`
+
+**Service ops:**
+```bash
+systemctl --user status amb82-recorder
+systemctl --user restart amb82-recorder
+systemctl --user stop amb82-recorder
+journalctl --user -u amb82-recorder -f
+```
+
+**Timezone:** Clip filenames and timestamps use the server's system timezone.
+Set it with `sudo timedatectl set-timezone Europe/Sofia` (or as needed).

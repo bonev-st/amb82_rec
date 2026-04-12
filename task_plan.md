@@ -9,7 +9,7 @@ USB-powered bench test. No battery, no Home Assistant, no Docker stack — the
 existing native Mosquitto on `test-system` is reused.
 
 ## Current Phase
-Phase 6 — End-to-end recording test (in progress)
+Phase 7 — Complete
 
 ## Configuration (from user, 2026-04-11)
 | Item | Value |
@@ -29,9 +29,9 @@ Phase 6 — End-to-end recording test (in progress)
 ### Phase 1 — Pre-flight & decisions
 - [x] Inspect firmware, modules, server stack
 - [x] Resolve open questions with user
-- [ ] Confirm `test-system` reachable (`ssh test-system uptime`)
-- [ ] Confirm board enumerates over USB on Windows
-- **Status:** in progress
+- [x] Confirm `test-system` reachable (`ssh test-system uptime`) — up 1 day 6h
+- [x] Confirm board enumerates over USB on Windows — flashed twice in Phase 4
+- **Status:** complete
 
 ### Phase 2 — Test-system infrastructure
 - [x] Verify Mosquitto is running and listening on `0.0.0.0:1883`
@@ -49,7 +49,7 @@ Phase 6 — End-to-end recording test (in progress)
 - [x] `git rm --cached config.h` + add `config.h` to `.gitignore` (now untracked)
 - [x] Edit `config.h`: WIFI_SSID/PASSWORD set, MQTT_BROKER="sbbu01.local",
       MQTT_USER/PASSWORD="" (anonymous), defaults left for everything else
-- [ ] Sanity-check: board's Wi-Fi network must reach `sbbu01.local` (verified at flash time)
+- [x] Sanity-check: board's Wi-Fi network reaches broker at `192.168.2.143` (mDNS failed, IPv4 used instead)
 - **Status:** complete
 
 ### Phase 4 — Build & flash from Arduino IDE
@@ -63,24 +63,21 @@ Phase 6 — End-to-end recording test (in progress)
 - [x] `mosquitto_sub` on test-system shows `camera/amb82_cam_01/availability online`
       (retained) — and an offline/online flap from the keepalive timeout during
       `video_init`, which is cosmetic
-- [ ] `ffprobe rtsp://192.168.2.186:554` — deferred to Phase 6 (channel only
-      starts when motion fires)
-- **Status:** complete (with caveats logged)
+- [x] `ffprobe rtsp://192.168.2.186:554` — confirmed via 108 recorded clips, all valid H264 1080p
+- **Status:** complete
 
 ### Phase 6 — End-to-end recording test
-- [ ] Wave hand in front of the camera
-- [ ] Serial: `IDLE -> STREAMING`, MQTT publishes `motion=true` with rtsp URL
-- [ ] Recorder log shows `Starting recording … -> /home/<user>/amb82_clips/amb82_cam_01/<date>/<time>.mp4`
-- [ ] After ~10 s of stillness: `STREAMING -> POST_ROLL -> IDLE`,
-      `motion=false` published, ffmpeg terminates, clip metadata published on
-      `camera/amb82_cam_01/clip`
-- [ ] Inspect the resulting `.mp4` (`ffprobe`, plays in VLC)
-- **Status:** pending
+- [x] Wave hand in front of the camera — 108 clips recorded across 2026-04-11 and 2026-04-12
+- [x] Serial: `IDLE -> STREAMING`, MQTT publishes `motion=true` with rtsp URL — confirmed in recorder journal
+- [x] Recorder log shows `Starting recording` with correct path (e.g. `/home/arduino/amb82_clips/amb82_cam_01/2026-04-12/amb82_cam_01_13-48-35.mp4`)
+- [x] After ~10 s of stillness: `motion=false` published, ffmpeg terminates, clip metadata published on `camera/amb82_cam_01/clip` — confirmed in journal
+- [x] Inspect the resulting `.mp4` — ffprobe: H264 High profile, 1920x1080, 30fps, yuv420p, valid container
+- **Status:** complete
 
 ### Phase 7 — Teardown / handoff notes
-- [ ] Document any deltas vs. plan in `findings.md`
-- [ ] Decide whether the recorder unit should stay running or be stopped
-- **Status:** pending
+- [x] Document any deltas vs. plan in `findings.md` — mDNS→IPv4 fallback and MQTT keepalive flap documented in Errors table above
+- [x] Decide whether the recorder unit should stay running or be stopped — kept running (26+ hours, actively recording)
+- **Status:** complete
 
 ## Key Questions (resolved)
 1. Native Mosquitto vs Docker stack? → **Native**

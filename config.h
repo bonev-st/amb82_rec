@@ -28,6 +28,7 @@
 #define MQTT_TOPIC_BATTERY  "camera/" DEVICE_ID "/battery"
 #define MQTT_TOPIC_MOTION   "camera/" DEVICE_ID "/motion"
 #define MQTT_TOPIC_LWT      "camera/" DEVICE_ID "/availability"
+#define MQTT_TOPIC_CONFIG   "camera/" DEVICE_ID "/config"
 
 #define MQTT_RECONNECT_INTERVAL_MS 5000
 #define MQTT_STATUS_INTERVAL_MS    3600000 // 1 hour

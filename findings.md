@@ -108,12 +108,6 @@
 - **Critical finding:** Deep sleep is NOT compatible with continuous camera-based motion detection — the camera pipeline must be running to detect motion
 - Best approach: keep board active with lowest practical camera settings for detection
 
-#### SD Card / File System
-- `File` class with open/read/write/seek/close
-- `AmebaFatFS` for SD card access
-- MP4 files saved directly to SD card by RecordMP4
-- Example: AmebaFileSystem
-
 #### NTP Time Sync
 - `NTPClient` library
 - Constructor: `NTPClient(WiFiUDP, server, timeOffset, updateInterval)`
