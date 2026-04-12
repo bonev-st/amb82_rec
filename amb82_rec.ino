@@ -146,6 +146,7 @@ void setup() {
     LOG("========================================\n");
 
     mqttMgr.publishStatus(batteryMon.getPercentage(), batteryMon.getVoltage(), wifiMgr.getRSSI());
+    lastStatusTime = millis();
 }
 
 // ============================================================
@@ -157,6 +158,26 @@ void loop() {
     // Motion detection state machine — always first, never blocked.
     bool motionDetected = checkMotion();
     handleStreamingState(motionDetected, now);
+
+    // Battery monitoring — update() has its own 60s throttle
+    batteryMon.update();
+    if (batteryMon.hasNewAlert()) {
+        mqttMgr.publishBatteryAlert(
+            batteryMon.getAlertLevel(),
+            batteryMon.getPercentage(),
+            batteryMon.getVoltage()
+        );
+    }
+
+    // Periodic status publish (every MQTT_STATUS_INTERVAL_MS = 1 hour)
+    if (now - lastStatusTime >= MQTT_STATUS_INTERVAL_MS) {
+        lastStatusTime = now;
+        mqttMgr.publishStatus(
+            batteryMon.getPercentage(),
+            batteryMon.getVoltage(),
+            wifiMgr.getRSSI()
+        );
+    }
 
     // IMPORTANT: mqttMgr.loop() and mqttMgr.ensureConnected() are
     // DELIBERATELY absent from the main loop. On the Ameba-patched
@@ -175,7 +196,6 @@ void loop() {
         wifiMgr.ensureConnected();
     }
 
-    (void)now;
     delay(100);
 }
 
@@ -256,5 +276,7 @@ void stopStreaming() {
     LOGF("[RTSP] Motion-stop after %.1f seconds\n", durationMs / 1000.0f);
 
     mqttMgr.publishMotionEvent(false, NULL);
+    mqttMgr.publishStatus(batteryMon.getPercentage(), batteryMon.getVoltage(), wifiMgr.getRSSI());
+    lastStatusTime = millis();  // Reset hourly timer so we don't double-publish
     digitalWrite(REC_LED_PIN, LOW);
 }

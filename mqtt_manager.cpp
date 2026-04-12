@@ -56,7 +56,10 @@ void MqttManager::loop() {
 }
 
 void MqttManager::publishStatus(int batteryPct, float batteryV, int rssi) {
-    if (!_client.connected()) return;
+    if (!_client.connected()) {
+        ensureConnected();  // backoff-gated, non-blocking
+        if (!_client.connected()) return;
+    }
 
     char payload[256];
     snprintf(payload, sizeof(payload),
@@ -97,7 +100,14 @@ void MqttManager::publishMotionEvent(bool motionActive, const char* rtspUrl) {
 }
 
 void MqttManager::publishBatteryAlert(const char* level, int percentage, float voltage) {
-    if (!_client.connected()) return;
+    if (!_client.connected()) {
+        LOG("[MQTT] battery alert: not connected, forcing reconnect...");
+        _lastReconnectAttempt = millis();
+        if (!connect()) {
+            LOG("[MQTT] battery alert: reconnect failed — alert lost");
+            return;
+        }
+    }
 
     char payload[256];
     snprintf(payload, sizeof(payload),
