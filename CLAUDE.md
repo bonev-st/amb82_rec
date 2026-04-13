@@ -313,6 +313,55 @@ void analogReadResolution(int res);  // default 10-bit (0-1023)
 **Note:** No A3 pin available.
 **Built-in LED:** `LED_BUILTIN` (PF_9, blue), **Button:** `PUSH_BTN` (PF_10)
 
+### Watchdog Timer (WDT)
+
+**Header:** `libraries/Watchdog/src/WDT.h`
+
+```cpp
+// WDT wdt;                          // DO NOT USE — declared in header but not defined in .cpp (linker error)
+WDT wdt(0);                          // Use this — 0 = normal WDT, 1 = Always-On WDT
+
+void init(uint32_t timeout_ms);      // Init with timeout (1000–65535 ms)
+void start(void);                    // Start watchdog counter
+void stop(void);                     // Stop watchdog counter
+void refresh(void);                  // Reset timer (call in loop to prevent reboot)
+void init_irq(wdt_irq_handler handler, uint32_t id);  // Optional: interrupt instead of reset
+```
+
+**Usage pattern (release builds only):**
+```cpp
+#if WDT_ENABLED
+  WDT wdt;
+  wdt.init(30000);    // 30s timeout
+  wdt.start();
+  // ... in loop():
+  wdt.refresh();      // Must be called within timeout period
+#endif
+```
+
+**Note:** The SDK's `Arduino.h` defines `WDT_TIMEOUT_MS` (default 10000), `WDT_PERIOD_MS` (default 200), and `LOOP_TIMEOUT_MS` (default 1500) — these are for the SDK's internal health check, not our watchdog. Our `config.h` defines its own `WDT_TIMEOUT_MS` which shadows the SDK default when `WDT_ENABLED` is set.
+
+### Build Modes (DEBUG / RELEASE)
+
+The firmware has two build modes controlled in `config.h`:
+
+```c
+// #define BUILD_RELEASE    // Production: no serial, WDT, power-optimized
+#define BUILD_DEBUG         // Development: serial logging, faster polling
+```
+
+**What changes between modes:**
+- `LOG()`/`LOGF()` macros become no-ops in RELEASE
+- `Serial.begin()` and 2s boot delay are skipped in RELEASE
+- Detection FPS: 10 (debug) vs 5 (release)
+- Main loop idle delay: 100ms (debug) vs 500ms (release)
+- Battery check: 60s (debug) vs 120s (release)
+- Config poll: 1min (debug) vs 5min (release)
+- WDT: disabled (debug) vs enabled at 30s (release)
+
+**Important:** When adding new debug output, always use `LOG()` or `LOGF()` —
+never raw `Serial.print()` or `printf()`. This ensures release builds stay silent.
+
 ### Linux Server (for tests)
 ## Access to remote Linux test machine
 System: Debian 13 (aarch64)

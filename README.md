@@ -33,8 +33,46 @@ AMB82 Mini                              Linux Server
 2. Add Ameba board package URL: `https://github.com/ambiot/ambpro2_arduino`
 3. Select board **AMB82 Mini**
 4. Edit `config.h` — set WiFi credentials, MQTT broker IP
-5. Remove any user-installed PubSubClient from Arduino libraries (use SDK version)
-6. Compile and upload via USB
+5. Select build mode (see below)
+6. Remove any user-installed PubSubClient from Arduino libraries (use SDK version)
+7. Compile and upload via USB
+
+## Build Modes (DEBUG / RELEASE)
+
+The firmware supports two build modes controlled by a single `#define` in
+`config.h`. **Exactly one** must be active:
+
+```c
+// Uncomment ONE of these lines in config.h:
+// #define BUILD_RELEASE    // Production
+#define BUILD_DEBUG         // Development (default)
+```
+
+| Feature | DEBUG | RELEASE |
+|---------|-------|---------|
+| Serial output | Full logging at 115200 baud | Disabled (UART off) |
+| Boot delay | 2s (for serial monitor) | None |
+| MD region logging | Every 500ms | Disabled |
+| Detection FPS | 10 fps | 5 fps (power saving) |
+| Main loop delay (idle) | 100ms | 500ms (power saving) |
+| Main loop delay (streaming) | 100ms | 100ms |
+| Battery check interval | 60s | 120s |
+| Config poll interval | 1 min | 5 min |
+| Watchdog timer | Disabled | Enabled (30s timeout) |
+| MQTT status payload | Includes `firmware` + `build` fields | Same |
+
+### Switching modes
+
+1. Open `config.h`
+2. Comment out `#define BUILD_DEBUG` and uncomment `#define BUILD_RELEASE` (or vice versa)
+3. Recompile and flash
+
+### When to use each mode
+
+- **DEBUG** — bench testing, serial monitor attached, diagnosing motion detection
+  sensitivity, verifying MQTT payloads
+- **RELEASE** — deployed camera running on battery, no serial monitor, maximum
+  battery life, watchdog auto-recovery from hangs
 
 ## Server Setup
 
@@ -79,7 +117,7 @@ server/clips/
 | Topic | Direction | Payload |
 |-------|-----------|---------|
 | `camera/<id>/motion` | Camera -> Server | `{"motion":true/false, "rtsp":"rtsp://..."}` |
-| `camera/<id>/status` | Camera -> Server | `{"timestamp":1776025279, "battery_pct":85, "rssi":-45, "uptime":3600}` |
+| `camera/<id>/status` | Camera -> Server | `{"firmware":"1.0.0", "build":"RELEASE", "timestamp":..., "battery_pct":85, "rssi":-45, "uptime":3600}` |
 | `camera/<id>/battery` | Camera -> Server | `{"alert":"LOW", "battery_pct":18, "timestamp":1776025299}` |
 | `camera/<id>/clip` | Server -> HA | `{"file":"/clips/...", "size_bytes":...}` |
 | `camera/<id>/availability` | Camera -> Server | `"online"` / `"offline"` (LWT) |

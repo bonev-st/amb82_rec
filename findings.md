@@ -1,154 +1,90 @@
-# Findings & Decisions
+# Findings — Power Optimization & Release Build
 
-## 2026-04-11 — Bench deployment analysis (amb82_rec.ino)
+## Code Review: Power Waste Inventory
 
-### Runtime dependencies inferred from `amb82_rec.ino`
-- **WiFi** (`WiFi.h`, `WiFiUdp.h`) → board needs SSID/password reaching the test LAN
-- **NTP** (`NTPClient.h`) → outbound UDP to `pool.ntp.org`; `forceUpdate()` is
-  called once in `setup()` because `update()` is a no-op before the interval
-- **Camera pipeline** → Channel 0 (FHD H264 @ 30fps, 2 Mbps) configured but
-  *not started* until motion fires; Channel 3 (VGA RGB @ 10fps) always-on for
-  motion detection. Both channels must be `configVideoChannel`'d before
-  `Camera.videoInit()`, otherwise the sensor won't initialise.
-- **RTSP** server bound on `:554`, started/stopped via `rtsp.begin()`/`end()`
-  (the SDK maps these to `RTSPSetStreaming(1/0)` so toggling is cheap).
-- **MotionDetection** on channel index `3` (NOT `V3_CHANNEL`=2), 8 s warm-up
-  needed for AE + background model. `getResultCount() >= 3` is the trigger.
-- **MQTT** via `PubSubClient` — uses the SDK-patched copy under `src/` (512 B
-  max packet) instead of the user-installed stock copy (256 B). Topics:
-  `camera/<id>/status|battery|motion|availability`. LWT is configured.
-- **Battery monitor** reads `A0`; harmless when USB-powered (will report
-  garbage voltage but no functional impact).
+### 1. Serial logging is always active (biggest easy win)
+- `checkMotion()` prints MD region count every 500ms — in a production device
+  this is pure waste (serial TX draws current + CPU cycles for `printf` formatting)
+- Every module (`wifi_manager`, `mqtt_manager`, `battery_monitor`) has LOG/LOGF calls
+- The existing `DEBUG_ENABLED` flag already gates `LOG`/`LOGF` macros — good foundation
+- **But:** the 2s `delay(2000)` in `setup()` and `Serial.begin()` itself are still active in release
 
-### Server-side dependencies (`server/recorder/recorder.py`)
-- Python 3, `paho-mqtt==2.1.0`
-- `ffmpeg` on `$PATH` (used with `-rtsp_transport tcp -c copy` — passthrough,
-  no re-encode, very low CPU)
-- Subscribes to `camera/+/motion`; payload schema is `{"motion": bool, "rtsp": "..."}`
-- Writes clips to `$CLIPS_DIR/<device_id>/<YYYY-MM-DD>/<HH-MM-SS>.mp4`
-- Publishes `camera/<id>/clip` metadata when ffmpeg exits
+### 2. Main loop timing is fixed at 100ms
+- `delay(100)` in `loop()` regardless of state
+- In `STATE_IDLE` (which is 99% of the time), nothing time-sensitive happens
+  — motion check + battery update + WiFi check can easily tolerate 500ms
+- In `STATE_STREAMING`/`STATE_POST_ROLL`, 100ms is fine for responsive state transitions
 
-### Test-system already has
-- Mosquitto 2.0.21, listener `0.0.0.0:1883`, anonymous, no firewall
-  (per CLAUDE.md). This satisfies the broker requirement directly — the
-  bundled `server/docker-compose.yml` is **not** used in this bench test.
+### 3. Channel 0 (H264 FHD 30fps) runs continuously
+- This is the **single largest power consumer** in the system
+- Comment in code explains why: dynamically toggling Ch0 produced broken H264 streams
+- **Cannot optimize without risking recording quality** — this is a known SDK limitation
+- Possible future experiment: reduce Ch0 to 15fps or HD when idle, bump to FHD 30fps on motion
 
-### Decisions for this bench test
-| Decision | Rationale |
-|----------|-----------|
-| Skip Docker stack | Existing native broker works; fewer moving parts |
-| Run recorder.py natively in a venv | Same reason; matches "test-system directly" choice |
-| Anonymous MQTT | Matches existing broker config; LAN-only |
-| `MQTT_BROKER = sbbu01.local` | Resolves via mDNS; fall back to IPv4 if needed |
-| Untrack `config.h` before editing | It currently contains placeholders, but real creds must not be committed |
-| Leave battery code enabled | Code path is harmless on USB; disabling is extra churn |
+### 4. Detection channel at 10fps
+- `config.h` defines `DETECT_FPS 10` for Channel 3 (VGA RGB)
+- SDK examples use 10fps, but 5fps should be sufficient for motion detection
+- Reducing to 5fps halves the RGB processing load on the detection pipeline
 
-## Requirements
-- Platform: Ameba AMB82 Mini (RTL8735B, ARM Cortex-M33)
-- Toolchain: Arduino IDE with Ameba Arduino SDK (ambpro2_arduino)
-- Battery-powered motion-triggered video recorder
-- Motion detection → start recording → 10s post-roll → finalize clip
-- Upload clip to server (MinIO S3-compatible)
-- MQTT for status/metadata (battery, motion events, clip info)
-- Low battery + new video notifications (edge-triggered, no spam)
-- WiFi reconnect, upload retry, no clip loss
-- Power optimization is critical
+### 5. Battery ADC sampling blocks for 20ms
+- `readVoltage()` reads 10 samples with `delay(2)` between each = 20ms blocked
+- Called every 60s, so total impact is low (20ms/60000ms = 0.03%)
+- Could be optimized but **not worth the complexity** for this interval
 
-## Research Findings
+### 6. checkConfig() creates a new TCP+MQTT connection every 60s
+- Each `pullConfig()` call: TCP connect → MQTT CONNECT → SUBSCRIBE → 3×loop() → DISCONNECT
+- This is ~200-500ms of network activity every minute
+- In release, checking every 5 minutes is sufficient (config changes are rare)
 
-### AMB82 Mini SDK APIs
+## Release vs Debug: What Needs to Change
 
-#### Motion Detection
-- Class: `MotionDetection` via `#include "MotionDetection.h"`
-- Two modes: `CallbackPostProcessing` (callback on motion) and `LoopPostProcessing` (poll in loop)
-- Works by comparing RGB information between video frames from JX-F37P sensor
-- Detection mask array: 1 = region enabled, 0 = disabled
-- Official examples: MotionDetection/LoopPostProcessing, MotionDetection/CallbackPostProcessing, MotionDetection/MaskingMP4Recording
+| Feature | DEBUG | RELEASE |
+|---------|-------|---------|
+| `Serial.begin()` | Yes (115200 baud) | Skip entirely |
+| Boot delay (2s) | Yes | No |
+| LOG/LOGF macros | Active | No-op (already implemented) |
+| MD count logging (500ms) | Active | No-op |
+| State transition logging | Active | No-op |
+| MQTT payload logging | Active | No-op |
+| Main loop delay | 100ms always | 500ms idle / 100ms streaming |
+| checkConfig interval | 60s | 300s (5 min) |
+| Detection FPS | 10 | 5 (power saving) |
+| Boot banner with version | Verbose | Minimal or none |
+| Firmware version in MQTT | Yes | Yes |
 
-#### MP4 Recording
-- Class: `RecordMP4` (or `MP4Recording`)
-- Modes: AudioOnly, VideoOnly, SingleVideoWithAudio, DoubleVideoWithAudio
-- Records from onboard camera sensor (JXF37) + audio codec
-- Saves MP4 files to SD card
-- Supports H.264 and H.265 video encoding
-- Official example: RecordMP4/SingleVideoWithAudio
+## Questions for User
 
-#### Video Pipeline
-- `VideoSetting` class configures resolution, FPS, codec, channel
-- Example: `VideoSetting configV1(VIDEO_FHD, CAM_FPS, VIDEO_H264, 0);`
-- `Camera` class manages video streams
-- `StreamIO` connects pipeline stages (camera → encoder → recorder/motion detection)
-- Multiple concurrent streams supported (dual channel)
-- JXF37 sensor: up to 1920×1080
-- Formats: VIDEO_FHD, VIDEO_HD, VIDEO_VGA; Codecs: VIDEO_H264, VIDEO_H265, VIDEO_JPEG
+### Q1: Detection FPS in release — 5fps ok?
+Reducing from 10fps to 5fps saves processing power but increases the minimum
+time to detect motion start/stop from ~100ms to ~200ms. For a security camera
+this is negligible. **Recommendation: 5fps in release, 10fps in debug.**
 
-#### WiFi
-- `WiFiClient` class with connect/read/write/stop methods
-- Security: OPEN, WPA, WEP, WPA2-EAP
-- `setRecvTimeout()`, blocking/non-blocking modes
-- Example: WiFi/ConnectToWiFi, WiFi/SimpleHttpRequest
+### Q2: Main loop idle delay — 500ms ok?
+In IDLE state, increasing `delay(100)` to `delay(500)` means:
+- Motion detection response: up to 500ms slower (imperceptible for recording)
+- WiFi reconnect check: 5× less frequent (fine, it's non-blocking)
+- Battery update: unaffected (has its own 60s timer)
+**Recommendation: 500ms idle, 100ms during streaming.**
 
-#### HTTP Upload
-- Built on WiFiClient — construct HTTP POST/PUT manually
-- Official example: RecordMP4/HTTP_Post_MP4_Httpbin
-- Can upload MP4 files from SD card to server via HTTP POST
-- For MinIO: use HTTP PUT with S3v4 signing or presigned URLs
+### Q3: Battery check interval for release?
+Currently 60s. On battery power, checking every 120s or even 300s is fine —
+voltage doesn't change fast. **Recommendation: 120s in release.**
 
-#### MQTT
-- Built-in `AmebaMQTTClient` library
-- TLS support
-- Publish/subscribe functionality
-- Example: AmebaMQTTClient/MQTT_TLS
-- Alternative: PubSubClient (third-party, widely used)
+### Q4: Should RELEASE mode skip Serial entirely?
+If `Serial.begin()` is never called, the UART peripheral stays powered down.
+Downside: no way to debug a deployed unit without reflashing.
+**Recommendation: Skip Serial in release — if you need to debug, flash DEBUG build.**
 
-#### Power Saving / Deep Sleep
-- Three modes: Sleep, Snooze, Deep Sleep
-- Deep Sleep wake sources: AON Timer, AON GPIO, RTC
-- Deep Sleep = ultra-low power but full reboot on wake
-- **Critical finding:** Deep sleep is NOT compatible with continuous camera-based motion detection — the camera pipeline must be running to detect motion
-- Best approach: keep board active with lowest practical camera settings for detection
+### Q5: Watchdog timer — desired?
+The AMB82 SDK has a `WDT` (watchdog timer) class. If the main loop hangs
+(e.g., WiFi stack deadlock), the watchdog reboots the board automatically.
+**Recommendation: Enable in release with 30s timeout. Add `WDT.refresh()` in loop.**
 
-#### NTP Time Sync
-- `NTPClient` library
-- Constructor: `NTPClient(WiFiUDP, server, timeOffset, updateInterval)`
-- Retrieves UTC time, applies timezone offset
-- Example: NTPClient/Advanced
+### Q6: Firmware version scheme?
+Suggest: `FIRMWARE_VERSION "1.0.0"` in `config.h`, included in MQTT status
+messages and boot banner. Bump manually on each release.
 
-#### ADC / Battery Reading
-- ADC available on GPIO pins
-- Power supply: 3.3V–5V
-- Use voltage divider circuit to read battery voltage
-- `analogRead(pin)` standard Arduino API expected
-
-### Server Architecture Comparison
-
-| Option | Pros | Cons | Verdict |
-|--------|------|------|---------|
-| Home Assistant + MQTT + MinIO | Local, extensible, low cost, rich automation | More setup | **Best fit** |
-| NAS/shared folder | Simple | No automation, limited notifications | Too basic |
-| Cloud storage | Managed | Ongoing cost, privacy, latency | Overkill |
-| NVR (Frigate/ZoneMinder) | Designed for cameras | Expects RTSP streams, not clips | Wrong paradigm |
-
-### Power Strategy Analysis
-- Camera-based motion detection requires active board + camera sensor → no deep sleep while watching
-- Best compromise: low-res, low-FPS detection channel (e.g., 640×480 @ 5fps) + high-res recording channel (1080p @ 15-20fps)
-- Battery measurement: every 60 seconds (low overhead)
-- Status reporting: every 5 minutes via MQTT
-- **Cannot optimize further:** the fundamental requirement for motion-triggered video means the camera and MCU must stay powered
-
-## Technical Decisions
-| Decision | Rationale |
-|----------|-----------|
-| Dual video channel (low-res detect + high-res record) | Minimize power while idle, maximize quality during events |
-| SD card intermediate storage | Decouple recording from upload; survive network outages |
-| HTTP PUT to MinIO (presigned URL or basic auth) | Simple S3-compatible upload; avoid complex AWS signing |
-| MQTT for metadata only (not video) | Lightweight; video goes direct to object storage |
-| Edge-triggered battery alerts | Notify once per threshold crossing, not every measurement |
-| NTP sync on boot only | Minimize network traffic; RTC drift acceptable for clip naming |
-| 10s post-roll timer with reset on new motion | Per requirements; seamless recording extension |
-
-## Resources
-- AMB82 Mini SDK repo: https://github.com/Ameba-AIoT/ameba-arduino-pro2
-- API docs: https://ameba-doc-arduino-sdk.readthedocs-hosted.com/en/latest/ameba_pro2/amb82-mini/
-- Forum: https://forum.amebaiot.com/
-- Key examples: MotionDetection/MaskingMP4Recording, RecordMP4/SingleVideoWithAudio, RecordMP4/HTTP_Post_MP4_Httpbin
+### Q7: Should config polling be disabled entirely in release?
+`checkConfig()` exists for runtime timezone changes via MQTT. If timezone is
+set once and rarely changes, we could disable polling in release and only
+read config at boot. **Recommendation: Keep but reduce to every 5 minutes.**

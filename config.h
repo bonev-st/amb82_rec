@@ -2,6 +2,23 @@
 #define CONFIG_H
 
 // ============================================================
+// Build Mode: uncomment ONE of the following lines
+// ============================================================
+#define BUILD_RELEASE    // Production: no serial, WDT, power-optimized
+// #define BUILD_DEBUG         // Development: serial logging, faster polling
+
+// ============================================================
+// Firmware Version
+// ============================================================
+#define FIRMWARE_VERSION    "1.0.0"
+
+#ifdef BUILD_RELEASE
+  #define FIRMWARE_BUILD    "RELEASE"
+#else
+  #define FIRMWARE_BUILD    "DEBUG"
+#endif
+
+// ============================================================
 // Device Identity
 // ============================================================
 #define DEVICE_ID           "amb82_cam_01"
@@ -37,7 +54,11 @@
 // Battery Monitoring
 // ============================================================
 #define BATTERY_ADC_PIN     A0
-#define BATTERY_CHECK_INTERVAL_MS  60000   // Check every 60 seconds
+#ifdef BUILD_RELEASE
+  #define BATTERY_CHECK_INTERVAL_MS  120000  // Check every 120 seconds (release)
+#else
+  #define BATTERY_CHECK_INTERVAL_MS  60000   // Check every 60 seconds (debug)
+#endif
 #define BATTERY_FULL_VOLTAGE       4.2f    // Fully charged LiPo
 #define BATTERY_EMPTY_VOLTAGE      3.3f    // Cutoff voltage
 #define BATTERY_LOW_THRESHOLD_PCT  20      // Low battery alert at 20%
@@ -51,7 +72,11 @@
 // Motion Detection (Channel 3, RGB format required by SDK)
 // ============================================================
 #define DETECT_CHANNEL      3              // SDK requires channel 3 for RGB motion detection
-#define DETECT_FPS          10
+#ifdef BUILD_RELEASE
+  #define DETECT_FPS        5              // 5fps saves power; ~200ms detection latency
+#else
+  #define DETECT_FPS        10             // 10fps for responsive debugging
+#endif
 #define DETECT_CODEC        VIDEO_RGB      // Must be RGB for MotionDetection
 #define MOTION_DETECT_SENSITIVITY  2       // Trigger when >= N connected motion regions detected
 #define MOTION_POST_ROLL_MS        10000   // Stream 10 seconds after motion ends
@@ -80,21 +105,46 @@
 // ============================================================
 // Power Management
 // ============================================================
-#define POWER_IDLE_REDUCE_FPS   true   // Reduce detection FPS when idle for long periods
-#define POWER_IDLE_TIMEOUT_MS   60000  // Consider "long idle" after 1 minute no motion
+#ifdef BUILD_RELEASE
+  #define LOOP_DELAY_IDLE_MS    500    // 500ms between polls when idle (power saving)
+  #define LOOP_DELAY_ACTIVE_MS  100    // 100ms during streaming/post-roll
+#else
+  #define LOOP_DELAY_IDLE_MS    100    // Fast polling for debug
+  #define LOOP_DELAY_ACTIVE_MS  100
+#endif
+
+// ============================================================
+// Config Polling
+// ============================================================
+#ifdef BUILD_RELEASE
+  #define CONFIG_CHECK_INTERVAL_MS  300000  // 5 minutes (release)
+#else
+  #define CONFIG_CHECK_INTERVAL_MS  60000   // 1 minute (debug)
+#endif
+
+// ============================================================
+// Watchdog Timer (release only)
+// ============================================================
+#ifdef BUILD_RELEASE
+  #define WDT_ENABLED        1
+  #define WDT_TIMEOUT_MS     30000    // 30s — reboot if loop hangs
+#else
+  #define WDT_ENABLED        0
+#endif
 
 // ============================================================
 // Serial Debug
 // ============================================================
 #define SERIAL_BAUD          115200
-#define DEBUG_ENABLED        true
 
-#if DEBUG_ENABLED
+#ifdef BUILD_RELEASE
+  // Release: no serial output at all — UART peripheral stays off
+  #define LOG(msg)           ((void)0)
+  #define LOGF(fmt, ...)     ((void)0)
+#else
+  // Debug: full serial logging
   #define LOG(msg)           Serial.println(msg)
   #define LOGF(fmt, ...)     printf(fmt, ##__VA_ARGS__)
-#else
-  #define LOG(msg)
-  #define LOGF(fmt, ...)
 #endif
 
 #endif // CONFIG_H

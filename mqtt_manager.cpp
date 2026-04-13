@@ -82,7 +82,7 @@ void MqttManager::checkConfig() {
     // message, so runtime timezone changes via MQTT take effect within
     // one polling interval without needing a reboot.
     unsigned long now = millis();
-    if (now - _lastConfigCheck < 60000) return;  // once per minute
+    if (now - _lastConfigCheck < CONFIG_CHECK_INTERVAL_MS) return;
     _lastConfigCheck = now;
     LOG("[MQTT] Checking for config update...");
     pullConfig();
@@ -155,11 +155,13 @@ void MqttManager::publishStatus(int batteryPct, float batteryV, int rssi) {
         if (!_client.connected()) return;
     }
 
-    char payload[256];
+    char payload[320];
     snprintf(payload, sizeof(payload),
-        "{\"device\":\"%s\",\"timestamp\":%lu,\"battery_pct\":%d,\"battery_v\":%.2f,"
+        "{\"device\":\"%s\",\"firmware\":\"%s\",\"build\":\"%s\","
+        "\"timestamp\":%lu,\"battery_pct\":%d,\"battery_v\":%.2f,"
         "\"rssi\":%d,\"uptime\":%lu}",
-        DEVICE_ID, getEpochTime(), batteryPct, batteryV, rssi, millis() / 1000);
+        DEVICE_ID, FIRMWARE_VERSION, FIRMWARE_BUILD,
+        getEpochTime(), batteryPct, batteryV, rssi, millis() / 1000);
 
     _client.publish(MQTT_TOPIC_STATUS, payload);
     LOGF("[MQTT] Status: %s\n", payload);

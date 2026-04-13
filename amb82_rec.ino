@@ -25,6 +25,10 @@
 #include "mqtt_manager.h"
 #include "battery_monitor.h"
 
+#if WDT_ENABLED
+#include <WDT.h>
+#endif
+
 // ============================================================
 // Global Objects
 // ============================================================
@@ -33,7 +37,7 @@
 VideoSetting configStream(VIDEO_FHD, CAM_FPS, VIDEO_H264, 0);
 
 // Channel 3: Low-res RGB for motion detection (always on)
-VideoSetting configMD(VIDEO_VGA, 10, VIDEO_RGB, 0);
+VideoSetting configMD(VIDEO_VGA, DETECT_FPS, VIDEO_RGB, 0);
 
 RTSP rtsp;
 MotionDetection motionDet;
@@ -51,6 +55,10 @@ MqttManager mqttMgr;
 BatteryMonitor batteryMon;
 
 WiFiClient mqttWifiClient;
+
+#if WDT_ENABLED
+WDT wdt(0);  // SDK bug: WDT() declared but not defined; use WDT(int) constructor
+#endif
 
 // RTSP URL buffer
 char rtspUrl[64] = {0};
@@ -77,10 +85,12 @@ void setup() {
     pinMode(REC_LED_PIN, OUTPUT);
     digitalWrite(REC_LED_PIN, LOW);
 
+#ifndef BUILD_RELEASE
     Serial.begin(SERIAL_BAUD);
-    delay(2000);
+    delay(2000);  // Let serial monitor attach
+#endif
     LOG("\n========================================");
-    LOG(" AMB82 Motion Camera — RTSP Streamer");
+    LOGF(" %s v%s [%s]\n", DEVICE_NAME, FIRMWARE_VERSION, FIRMWARE_BUILD);
     LOG("========================================");
 
     // ----------------------------------------------------------
@@ -147,6 +157,15 @@ void setup() {
     batteryMon.begin();
     mqttMgr.begin(mqttWifiClient, timeClient);
 
+    // ----------------------------------------------------------
+    // Phase D — Watchdog (release builds only)
+    // ----------------------------------------------------------
+#if WDT_ENABLED
+    wdt.init(WDT_TIMEOUT_MS);
+    wdt.start();
+    LOG("[WDT] Watchdog started (30s timeout)");
+#endif
+
     LOG("[Setup] Complete — entering motion detection loop");
     LOG("========================================\n");
 
@@ -200,10 +219,15 @@ void loop() {
     if (streamState == STATE_IDLE) {
         wifiMgr.ensureConnected();
         timeClient.update();    // re-sync NTP (self-throttled to once per hour)
-        mqttMgr.checkConfig();  // poll for timezone/config updates (once per minute)
+        mqttMgr.checkConfig();  // poll for timezone/config updates
     }
 
-    delay(100);
+#if WDT_ENABLED
+    wdt.refresh();
+#endif
+
+    // Adaptive delay: save power when idle, stay responsive during streaming
+    delay(streamState == STATE_IDLE ? LOOP_DELAY_IDLE_MS : LOOP_DELAY_ACTIVE_MS);
 }
 
 // ============================================================
@@ -211,17 +235,18 @@ void loop() {
 // ============================================================
 bool checkMotion() {
     uint16_t count = motionDet.getResultCount();
+#ifndef BUILD_RELEASE
+    // Verbose MD logging: every count change + every 500ms heartbeat.
+    // Debug only — serial I/O and printf formatting waste power.
     static uint16_t lastCount = 0xFFFF;
     static unsigned long lastPrint = 0;
     unsigned long now = millis();
-    // Log on every count change, and at least every 500 ms regardless,
-    // so the serial monitor shows continuous proof the MD pipeline is
-    // alive — matches tests/test_motion/test_motion.ino's UX.
     if (count != lastCount || now - lastPrint >= 500) {
         LOGF("[MD] regions=%u%s\n", count, count ? "" : " .");
         lastCount = count;
         lastPrint = now;
     }
+#endif
     return count >= MOTION_DETECT_SENSITIVITY;
 }
 
