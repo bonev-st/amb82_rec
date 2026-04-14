@@ -1,0 +1,20 @@
+# Subject Alternative Names for the broker server certificate.
+#
+# Why this file exists:
+# mbedTLS 2.28 (used on the AMB82 Mini) only matches the connection target
+# against SAN entries — not the CN field. If you connect by IP, the cert MUST
+# have an IP SAN; if you connect by hostname, it MUST have a DNS SAN.
+# Edit the entries below for your environment.
+#
+# Usage: this file is passed to `openssl x509 -extfile` when signing the
+# server certificate with the CA. See generate-server.sh.
+
+subjectAltName   = @alt_names
+# serverAuth means this cert is allowed to be used by TLS servers.
+extendedKeyUsage = serverAuth
+
+[alt_names]
+DNS.1 = sbbu01.local
+DNS.2 = localhost
+IP.1  = 192.168.2.143
+IP.2  = 127.0.0.1

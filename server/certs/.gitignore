@@ -1,0 +1,8 @@
+# Generated certs, keys, and password files — NEVER commit these.
+# Regenerate with ./generate-all.sh
+out/
+*.key
+*.csr
+*.crt
+*.srl
+passwd

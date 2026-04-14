@@ -1,0 +1,23 @@
+# OpenSSL config for generating the self-signed root CA.
+#
+# Why this file exists:
+# `openssl req -x509 -extensions v3_ca` is a no-op without a config file
+# that defines the [v3_ca] section. Without these extensions the resulting
+# cert has NO basicConstraints, and mbedTLS (and other strict TLS stacks)
+# will refuse to trust it as an issuer — you'll get MBEDTLS_ERR_X509_CERT_VERIFY_FAILED
+# (-0x2700) at handshake time.
+
+[req]
+distinguished_name = req_dn
+x509_extensions    = v3_ca
+prompt             = no
+
+[req_dn]
+CN = AMB82 MQTT CA
+
+[v3_ca]
+# CA:TRUE is REQUIRED for this cert to be trusted as an issuer.
+basicConstraints     = critical, CA:TRUE
+# keyCertSign lets this cert sign other certs; cRLSign lets it sign revocation lists.
+keyUsage             = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
