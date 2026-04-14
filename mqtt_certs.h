@@ -13,33 +13,35 @@
 // ============================================================
 
 // CA certificate — used to verify the broker's server certificate
+// Regenerated 2026-04-14 with basicConstraints=CA:TRUE (mbedTLS requirement)
 static const char* mqtt_ca_cert = \
 "-----BEGIN CERTIFICATE-----\n" \
-"MIIDETCCAfmgAwIBAgIUGgoTSoDiswqMU6a66V/i45V1TpowDQYJKoZIhvcNAQEL\n" \
-"BQAwGDEWMBQGA1UEAwwNQU1CODIgTVFUVCBDQTAeFw0yNjA0MTMwNjU0MzdaFw0z\n" \
-"NjA0MTAwNjU0MzdaMBgxFjAUBgNVBAMMDUFNQjgyIE1RVFQgQ0EwggEiMA0GCSqG\n" \
+"MIIDITCCAgmgAwIBAgIUKpgrrLcdQUlFCJVIq2bHNISFJSwwDQYJKoZIhvcNAQEL\n" \
+"BQAwGDEWMBQGA1UEAwwNQU1CODIgTVFUVCBDQTAeFw0yNjA0MTQwNjA0MzZaFw0z\n" \
+"NjA0MTEwNjA0MzZaMBgxFjAUBgNVBAMMDUFNQjgyIE1RVFQgQ0EwggEiMA0GCSqG\n" \
 "SIb3DQEBAQUAA4IBDwAwggEKAoIBAQDAwEmbnZejtRkznR3gWGkHGew7yjN2PKUA\n" \
 "7/HalmqWbEhkJbDq5sVYp8VLoZ+ckG3EiTeCf/yfFGThw+8b/3eLvJplnGBRrzNU\n" \
 "sVaHcusAvKd3VLiD39cbQrtnnIo94KxO1h5LZjots4MJP19B2GBOjFlOFSeTsTOB\n" \
 "1GVmP42aonteRXTZ50m90FCfLK9Ce23mC4MHzwCVMjNoHwEllceckrAtxgA6Wm/I\n" \
 "Deh5KOUFpJkmsVr7fWPYMoNOqyTVunXPlTQbTxh9In/jkRPS49H4vwzpFKpe2hOl\n" \
-"3ahoLrvXoTYW/DzK93apFHBn6ZJOWQqW/pFxd4/cPohWQukbvANpAgMBAAGjUzBR\n" \
-"MB0GA1UdDgQWBBRG+1ZZ/t89XOkFJIaH8nmExWr8BzAfBgNVHSMEGDAWgBRG+1ZZ\n" \
-"/t89XOkFJIaH8nmExWr8BzAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUA\n" \
-"A4IBAQArRs41EZQ7Ei2RdgEM22Xl23F446R7plXxv3vWqEagwHqIe1GE3vwMSMj7\n" \
-"GyWOlNJwCTR/jPonZklj5yJ2J1zP6VCvD3j3aFbpJwEFbBubLyekjngub+PiHi3j\n" \
-"Mg5fZteM9jGAWjckB/qA2iyephqlw9hDQ3/Ga8lylKmw627/yFz5CQx8a88t1lps\n" \
-"Kz60CTI6/nRAKaEwNfti8cQDGVM6/EFNUY9w86ZCGPdPFmPha9Yb2ENtTSaDlClp\n" \
-"sABJqY9I+JBQTIysY1LfbtK/Expr0H0avMdsG5ecbIsnAZ1OUnTEnh+JJWnFfAyA\n" \
-"FlNeuClOyDMFVpLZSTJR3Re3/8hR\n" \
+"3ahoLrvXoTYW/DzK93apFHBn6ZJOWQqW/pFxd4/cPohWQukbvANpAgMBAAGjYzBh\n" \
+"MB0GA1UdDgQWBBRG+1ZZ/t89XOkFJIaH8nmExWr8BzAPBgNVHRMBAf8EBTADAQH/\n" \
+"MA4GA1UdDwEB/wQEAwIBBjAfBgNVHSMEGDAWgBRG+1ZZ/t89XOkFJIaH8nmExWr8\n" \
+"BzANBgkqhkiG9w0BAQsFAAOCAQEAVjdhTWu9NA8FVKzNVnjLbiX48xm6Q3JAH8+W\n" \
+"pTk9ycKjrV4q/WemqPWk4xnVnUDUHJlF0soGarChIZva05khSqcg2hTHqfXBGkIk\n" \
+"GFCfLczsteUq2soCYe7pYhplk2rYSvI93Pui1FXYYDZNn8AJXOFDfJ5beTOufL+A\n" \
+"7JKVu4MwFaKopUsXW75EEYHO4+zUrvxPKrS46w3gsRH/KMzRKpHZq72XpVlsvRs+\n" \
+"eRWeejnVjQ56ZTy1/SRj68rLcpT/HIeRY2wOzfjVTwQsdggH+iSEsHXX63WyHIPa\n" \
+"XwU7PoWKCdw2AEfK2D/C19EqY9uV1zlR8oVy/afGgtptHz+CBw==\n" \
 "-----END CERTIFICATE-----\n";
 
 // Client certificate — presented to broker for mTLS authentication
+// Re-signed 2026-04-14 by regenerated CA (same client key)
 static const char* mqtt_client_cert = \
 "-----BEGIN CERTIFICATE-----\n" \
-"MIIC/zCCAeegAwIBAgIUDs6ggp1GeYL374TtZhL6yOq7IUMwDQYJKoZIhvcNAQEL\n" \
-"BQAwGDEWMBQGA1UEAwwNQU1CODIgTVFUVCBDQTAeFw0yNjA0MTMwNjU0MzhaFw0z\n" \
-"NjA0MTAwNjU0MzhaMBcxFTATBgNVBAMMDGFtYjgyX2NhbV8wMTCCASIwDQYJKoZI\n" \
+"MIIC/zCCAeegAwIBAgIUDs6ggp1GeYL374TtZhL6yOq7IUcwDQYJKoZIhvcNAQEL\n" \
+"BQAwGDEWMBQGA1UEAwwNQU1CODIgTVFUVCBDQTAeFw0yNjA0MTQwNjA0MzdaFw0z\n" \
+"NjA0MTEwNjA0MzdaMBcxFTATBgNVBAMMDGFtYjgyX2NhbV8wMTCCASIwDQYJKoZI\n" \
 "hvcNAQEBBQADggEPADCCAQoCggEBANBfEXlaPty8RpqgbsF7BLdS1kIWITQ2ipf6\n" \
 "wDHLBgATbOwRkBbnGYrdHBnBI2BYn7UUbN33sXnLNYqOLdGASa1wtHI1o+WkEvEn\n" \
 "Qi3XP9xy5vWcQ+qDYVUvlxHc5E+AV7Xh58o3LBTTz3oSdqey0mW48VeVYCdtjtJP\n" \
@@ -47,13 +49,13 @@ static const char* mqtt_client_cert = \
 "5a+dSygxuFocalymz9Gff5LMfAJkMdaM8oXMOhkTNrGknCEbPhldVrEByv+D9qXo\n" \
 "NCDrMFs0CT1+cNiHhgnH8e4iNaZ59ECz5comDv2CIDhy57lCVcMCAwEAAaNCMEAw\n" \
 "HQYDVR0OBBYEFALBdPKB9xeRn3ghbd3AV0yttLB+MB8GA1UdIwQYMBaAFEb7Vln+\n" \
-"3z1c6QUkhofyeYTFavwHMA0GCSqGSIb3DQEBCwUAA4IBAQA43InO96bJcbfpvDH/\n" \
-"hvgtQE93sOa1lXN0mQ6G7CL+D/69XnMX4++l6jUP+lel+rY9rhfpZq+VTgz3OqLa\n" \
-"B+PiuxrA9/F3zzDSd4LUJV+yobYRL/OhAaB120IMoMJrpgtyb2ke5ItDqiwRnxrK\n" \
-"wVlZuOpcyMoEBveuoQ6zW6voopCprlkJUq86YSGiEiN18+D3l3ekrQfw/kKvoDky\n" \
-"QbwqbR/TvWOnKxV5qN9LUeZS6c/2MlPxYwt4vwAlYmh9Ltfb/PNJhC8HnmeX4yN1\n" \
-"NlmJptVVRL18PGep/tPpa91izI9WV5WL/pnrWaiDCw0cQFSriuvwSIdSv1bcPXFF\n" \
-"Hudo\n" \
+"3z1c6QUkhofyeYTFavwHMA0GCSqGSIb3DQEBCwUAA4IBAQB2ahWToN3lZOET0Wgi\n" \
+"Ec545wZ+tM1BhlqalFVmGKwUclcD5yEYQ7yZPPQV48Sg5yEmRQcPqSZvhwNJLGke\n" \
+"Su6G1ckNjn6CP7729fk7nJcPXsuXK9qKUelH4oD/fKd3Q2bExO9WmXza+3L9m1SL\n" \
+"iRwuA/Al8r5RlxWkBDWiWyVGMVbyme44WLN9uqaOEFCctNbcCDRgumTb7sW9V3yS\n" \
+"7rDsCoTEfLNDUMEznpyi/C4irgFRBcuFAaNzdAZKjybxfoc9qfPJTi0YvgVku0zA\n" \
+"R5coIkc59J6U3VOtwbTg98Ts9SMbTRqS6gYiEeV5Cqa3D6Omp+S0lDdtNSJaE4SD\n" \
+"ERQ1\n" \
 "-----END CERTIFICATE-----\n";
 
 // Client private key — keep secret, used for mTLS handshake

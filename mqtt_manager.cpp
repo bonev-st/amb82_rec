@@ -2,12 +2,32 @@
 
 MqttManager* MqttManager::_instance = nullptr;
 
+// When TLS is enabled we MUST connect PubSubClient by IPAddress (not hostname
+// string). Reason: Ameba's WiFiSSLClient::connect(const char*, port) sets the
+// SNI hostname for mbedtls_ssl_set_hostname(); mbedTLS 2.28 then checks that
+// string against DNS SAN entries (not IP SAN). Passing an IP literal as a
+// "hostname" therefore always fails verification with -0x2700. The IPAddress
+// overload of connect() leaves _sni_hostname NULL, which makes mbedTLS skip
+// hostname matching entirely (chain-of-trust verification still happens).
+#if MQTT_USE_TLS
+// Ameba's IPAddress has no fromString() — parse "a.b.c.d" manually.
+static IPAddress mqttBrokerIP() {
+    unsigned int a = 0, b = 0, c = 0, d = 0;
+    sscanf(MQTT_BROKER, "%u.%u.%u.%u", &a, &b, &c, &d);
+    return IPAddress((uint8_t)a, (uint8_t)b, (uint8_t)c, (uint8_t)d);
+}
+#endif
+
 void MqttManager::begin(Client& netClient, NTPClient& timeClient) {
     _timeClient = &timeClient;
     _instance = this;
 
     _client.setClient(netClient);
+#if MQTT_USE_TLS
+    _client.setServer(mqttBrokerIP(), MQTT_PORT);
+#else
     _client.setServer(MQTT_BROKER, MQTT_PORT);
+#endif
     // No setCallback on main client — calling loop() on Ameba's WiFiClient
     // blocks indefinitely and corrupts the connection for subsequent publishes.
     // keepAlive=0 → per MQTT 3.1.1 [MQTT-3.1.2-25], broker must not drop the
@@ -62,7 +82,11 @@ void MqttManager::pullConfig() {
 #endif
     PubSubClient cfgClient;
     cfgClient.setClient(cfgWifi);
+#if MQTT_USE_TLS
+    cfgClient.setServer(mqttBrokerIP(), MQTT_PORT);
+#else
     cfgClient.setServer(MQTT_BROKER, MQTT_PORT);
+#endif
     cfgClient.setCallback(mqttCallback);
     cfgClient.setKeepAlive(15);
     cfgClient.setSocketTimeout(2);

@@ -19,6 +19,13 @@
 #include <VideoStream.h>
 #include <RTSP.h>
 #include <MotionDetection.h>
+#include <time.h>
+// rtc_write() from rtc_api.h is the SDK-linkable symbol (in liboutsrc.a)
+// that writes the hardware RTC. mbedTLS reads from this RTC to check cert
+// notBefore/notAfter during TLS handshake. Note: set_time() declared in
+// rtc_time.h is NOT compiled into the platform libs — use rtc_write().
+extern "C" void rtc_init(void);
+extern "C" void rtc_write(time_t t);
 
 #include "config.h"
 #include "wifi_manager.h"
@@ -114,6 +121,18 @@ void setup() {
         }
         LOGF("[NTP] Sync failed (attempt %d/5)\n", attempt);
         if (attempt < 5) delay(2000);
+    }
+
+    // Write the NTP epoch to the hardware RTC. mbedTLS reads from the RTC
+    // (via time()) to check cert notBefore/notAfter during TLS handshake.
+    // Without this, every cert looks "not yet valid" → -0x2700 handshake fail.
+    unsigned long epoch = timeClient.getEpochTime();
+    if (epoch > 1704067200UL) {  // sanity: after 2024-01-01
+        rtc_init();
+        rtc_write((time_t)epoch);
+        LOGF("[RTC] System time set to epoch %lu\n", epoch);
+    } else {
+        LOG("[RTC] WARNING: NTP epoch invalid, RTC not set — TLS will fail");
     }
 
     // ----------------------------------------------------------

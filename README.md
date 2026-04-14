@@ -215,15 +215,31 @@ Recompile and flash after changing.
 ```bash
 mkdir -p ~/mqtt_certs && cd ~/mqtt_certs
 
-# CA key + certificate
-openssl req -new -x509 -days 3650 -extensions v3_ca \
-  -keyout ca.key -out ca.crt -nodes -subj "/CN=AMB82 MQTT CA"
+# CA key + self-signed cert WITH proper CA:TRUE extension.
+# (Note: plain `-extensions v3_ca` does NOT set CA:TRUE without a config file —
+# mbedTLS on the ESP/AMB82 rejects CAs without basicConstraints=CA:TRUE.)
+openssl genrsa -out ca.key 2048
+openssl req -new -x509 -days 3650 -key ca.key -out ca.crt \
+  -subj "/CN=AMB82 MQTT CA" \
+  -extensions v3_ca -config <(cat /etc/ssl/openssl.cnf - << 'EOF'
+[v3_ca]
+basicConstraints = critical, CA:TRUE
+keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+EOF
+)
 
-# Server key + certificate (CN must match broker hostname)
+# Server cert with Subject Alternative Names so clients can connect by
+# hostname OR IP (mbedTLS on AMB82 validates hostname against SAN).
+cat > server_ext.cnf << 'EOF'
+subjectAltName = DNS:sbbu01.local, DNS:localhost, IP:192.168.2.143, IP:127.0.0.1
+extendedKeyUsage = serverAuth
+EOF
+
 openssl genrsa -out server.key 2048
 openssl req -new -key server.key -out server.csr -subj "/CN=sbbu01.local"
 openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key \
-  -CAcreateserial -out server.crt -days 3650
+  -CAcreateserial -out server.crt -days 3650 -extfile server_ext.cnf
 
 # Client certificate for camera
 openssl genrsa -out client_camera.key 2048
