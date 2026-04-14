@@ -1,77 +1,108 @@
-# Task Plan: Power Optimization & Release Build
+# Task Plan: Optional MQTT Security (Auth + mTLS)
 
 ## Goal
-Review all firmware code for power optimization opportunities and prepare a
-release-ready build configuration. Both DEBUG and RELEASE builds must be
-preserved — a single `#define` toggle in `config.h`.
+Add optional MQTT security to the firmware and test-system broker.
+Three configurable levels — all backward-compatible with the current anonymous setup:
+
+1. **Anonymous** (current default) — no auth, no encryption
+2. **Username/Password** — auth but no encryption (MQTT 1883)
+3. **mTLS + Username/Password** — encrypted + mutual TLS + authenticated (MQTT 8883)
 
 ## Current Phase
-Phase 5 — Complete
+Complete — All phases verified end-to-end
+
+## Credentials
+| User | Password | Purpose |
+|------|----------|---------|
+| `amb82_cam_01` | `DcU9EOHGPWxSH2T6` | Camera firmware |
+| `recorder` | `lKnvjNWu0pMzhjTG` | recorder.py service |
 
 ## Phases
 
-### Phase 1 — Code Review & Analysis
-- [x] Read all source files
-- [x] Identify power waste
-- [x] Identify debug-only code paths
-- [x] Draft plan and questions for user
+### Phase 1 — Research & Planning
+- [x] Read current MQTT code (config.h, mqtt_manager.h/.cpp, amb82_rec.ino)
+- [x] Research AMB82 SDK WiFiSSLClient API (full TLS + mTLS support confirmed)
+- [x] Check test-system Mosquitto config (anonymous on 1883, no TLS)
+- [x] Check recorder.py (already supports MQTT_USER/MQTT_PASS env vars)
+- [x] User confirmed: self-signed CA, keep anon on 1883, mTLS, generate passwords, certs in repo
 - **Status:** complete
 
-### Phase 2 — Build Configuration (DEBUG / RELEASE)
-- [x] Create `BUILD_MODE` toggle in `config.h` (BUILD_RELEASE / BUILD_DEBUG)
-- [x] Gate all verbose serial output behind DEBUG
-- [x] Gate MD region-count spam (500ms logging) behind `#ifndef BUILD_RELEASE`
-- [x] Add firmware version string + build mode to boot banner
-- [x] Skip `Serial.begin()` and 2s boot delay in RELEASE
-- [x] Use configurable `CONFIG_CHECK_INTERVAL_MS` (1min debug / 5min release)
+### Phase 2 — Certificate Generation (on test-system)
+- [x] Generate self-signed CA (10-year, CN="AMB82 MQTT CA")
+- [x] Generate server cert (CN="sbbu01.local")
+- [x] Generate camera client cert (CN="amb82_cam_01")
+- [x] Generate recorder client cert (CN="recorder")
+- [x] Create password file with mosquitto_passwd
+- [x] All certs stored at `~/mqtt_certs/` on test-system
 - **Status:** complete
 
-### Phase 3 — Power Optimizations
-- [x] Adaptive main loop delay (500ms idle / 100ms streaming in RELEASE)
-- [x] Reduce detection FPS (10fps debug / 5fps release)
-- [x] Fix hardcoded `10` in configMD constructor → use `DETECT_FPS`
-- [x] Increase battery check interval (60s debug / 120s release)
-- [x] Reduce `checkConfig()` polling frequency (1min debug / 5min release)
+### Phase 3 — Broker Configuration
+- [x] Write `secure.conf` with dual listeners (1883 anon + 8883 mTLS+auth)
+- [x] Write `install.sh` — fixed to resolve source via `$(dirname "$0")` under sudo
+- [x] User ran install.sh, certs deployed, mosquitto restarted
+- [x] Both 1883 and 8883 listeners confirmed listening
 - **Status:** complete
 
-### Phase 4 — Reliability Hardening (Release)
-- [x] Add WDT (30s timeout) gated behind `WDT_ENABLED` / `BUILD_RELEASE`
-- [x] Fix include order: `WDT.h` after `config.h` (needs `WDT_ENABLED` defined)
-- [x] Add firmware version + build mode to MQTT status payload
+### Phase 4 — Firmware: TLS + mTLS Support
+- [x] `config.h`: Added `MQTT_USE_TLS` toggle, conditional `MQTT_PORT` (8883/1883)
+- [x] `config.h`: Set MQTT_USER/PASSWORD to camera credentials
+- [x] Created `mqtt_certs.h` with CA cert + client cert + client key (PEM strings)
+- [x] `mqtt_manager.h`: Changed `begin()` to accept `Client&`, conditional WiFiSSLClient include
+- [x] `mqtt_manager.cpp`: `pullConfig()` uses WiFiSSLClient+mTLS when TLS enabled, passes credentials
+- [x] `amb82_rec.ino`: Conditional WiFiSSLClient global, setRootCA + setClientCertificate in setup
 - **Status:** complete
 
-### Phase 5 — Documentation
-- [x] Add build mode section to README.md (table of differences, switching instructions)
-- [x] Add WDT API reference to CLAUDE.md
-- [x] Add build mode reference to CLAUDE.md
-- [x] Update MQTT status topic payload example in README.md
+### Phase 5 — Recorder: TLS + mTLS Support
+- [x] `recorder.py`: Added MQTT_TLS, MQTT_CA_CERT, MQTT_CLIENT_CERT, MQTT_CLIENT_KEY env vars
+- [x] `recorder.py`: Added `client.tls_set()` with mTLS when enabled
+- [x] Deployed updated recorder.py to test-system
+- [x] Copied recorder client certs to `~/amb82_recorder/certs/`
+- [x] Updated systemd service with TLS env vars + recorder credentials
+- [x] Reloaded systemd daemon
+- **Status:** complete (will auto-connect once broker TLS listener is up)
+
+### Phase 6 — Documentation
+- [x] README.md: Full MQTT Security section (3 levels, switching guide, broker setup, cert gen, verify)
+- [x] CLAUDE.md: WiFiSSLClient API reference
+- [x] CLAUDE.md: MQTT Security section (MQTT_USE_TLS usage, mqtt_certs.h)
 - **Status:** complete
+
+### Phase 7 — End-to-end Verification
+- [x] Test 1: Anonymous on 1883 — OK
+- [x] Test 2: mTLS+auth on 8883 — OK
+- [x] Test 3: 8883 without client cert — correctly rejected
+- [x] Test 4: 8883 with wrong password — correctly rejected
+- [x] Recorder auto-connects via TLS+mTLS+auth — OK (after fixing broker to sbbu01.local)
+- [x] Test motion event over TLS → recorder spawned ffmpeg — OK
+- [ ] Firmware flash-test by user (manual, next step)
+- **Status:** server-side complete, firmware flash pending
+
+## Known Issue: Server Cert CN
+Server cert CN is `sbbu01.local`, so TLS clients must connect using that
+hostname (not an IP) for strict hostname verification (paho-mqtt does this).
+The recorder systemd service uses `MQTT_BROKER=sbbu01.local`.
+
+**Firmware note:** `MQTT_BROKER "192.168.2.143"` in config.h — mbedTLS on the
+AMB82 via `setRootCA()` typically does not enforce hostname verification
+(only chain-of-trust verification), so connecting by IP should work. If it
+fails, either (a) change to `"sbbu01.local"` if mDNS works on the board, or
+(b) regenerate the server cert with the IP in subjectAltName.
 
 ## Files Modified
 | File | Changes |
 |------|---------|
-| `config.h` | BUILD_RELEASE/DEBUG toggle, FIRMWARE_VERSION, conditional FPS/intervals/delays/WDT, reworked LOG macros |
-| `amb82_rec.ino` | WDT include+init+refresh, conditional Serial.begin, version banner, adaptive loop delay, configMD uses DETECT_FPS, debug-only MD logging |
-| `mqtt_manager.cpp` | firmware/build fields in status JSON, configurable config poll interval |
-| `README.md` | Build modes section with table, switching instructions |
-| `CLAUDE.md` | WDT API reference, build mode reference |
+| `config.h` | MQTT_USE_TLS toggle, conditional MQTT_PORT, credentials |
+| `mqtt_certs.h` | **New** — CA cert + client cert + client key (PEM) |
+| `mqtt_manager.h` | `begin(Client&)`, conditional WiFiSSLClient + mqtt_certs include |
+| `mqtt_manager.cpp` | pullConfig() TLS support, credentials passed to disposable client |
+| `amb82_rec.ino` | Conditional WiFiSSLClient, setRootCA + setClientCertificate |
+| `server/recorder/recorder.py` | TLS env vars, `client.tls_set()` with mTLS |
+| `README.md` | Full MQTT Security section |
+| `CLAUDE.md` | WiFiSSLClient API, MQTT Security reference |
 
-## Power Audit Summary
-
-### Optimized
-| Issue | Fix | Savings |
-|-------|-----|---------|
-| Serial logging always active | Gated behind BUILD_DEBUG; Serial.begin skipped in release | UART off, no printf overhead |
-| MD logging every 500ms | `#ifndef BUILD_RELEASE` block | No printf formatting in release |
-| Main loop fixed 100ms delay | 500ms when idle (release) | 5x less CPU wake-ups when idle |
-| Detection at 10fps | 5fps in release | ~50% less RGB processing |
-| Battery check every 60s | 120s in release | Half the ADC sampling frequency |
-| Config poll every 60s | 300s (5 min) in release | 5x fewer disposable MQTT connections |
-| Boot delay 2s | Skipped in release | 2s faster boot |
-
-### Cannot Optimize (Documented)
-| Item | Reason |
-|------|--------|
-| Channel 0 always on | Toggling Ch0/RTSP dynamically produced broken H264 (static image) |
-| 8s motion warm-up | Required for AE + background model |
-| Deep sleep | Camera pipeline must be active for motion detection |
+## Test-system files (not in repo)
+| Path | Contents |
+|------|----------|
+| `~/mqtt_certs/` | CA, server, client certs/keys, passwd, install.sh |
+| `~/amb82_recorder/certs/` | Recorder client cert + key + CA cert |
+| `~/.config/systemd/user/amb82-recorder.service` | Updated with TLS env vars |

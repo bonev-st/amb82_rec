@@ -54,7 +54,11 @@ WifiManager wifiMgr;
 MqttManager mqttMgr;
 BatteryMonitor batteryMon;
 
+#if MQTT_USE_TLS
+WiFiSSLClient mqttWifiClient;
+#else
 WiFiClient mqttWifiClient;
+#endif
 
 #if WDT_ENABLED
 WDT wdt(0);  // SDK bug: WDT() declared but not defined; use WDT(int) constructor
@@ -155,6 +159,15 @@ void setup() {
     // Phase C — Battery + MQTT (after camera/RTSP are live)
     // ----------------------------------------------------------
     batteryMon.begin();
+
+#if MQTT_USE_TLS
+    mqttWifiClient.setRootCA((unsigned char*)mqtt_ca_cert);
+    mqttWifiClient.setClientCertificate((unsigned char*)mqtt_client_cert,
+                                        (unsigned char*)mqtt_client_key);
+    LOG("[MQTT] TLS + mTLS enabled (port 8883)");
+#else
+    LOG("[MQTT] Plain connection (port 1883)");
+#endif
     mqttMgr.begin(mqttWifiClient, timeClient);
 
     // ----------------------------------------------------------

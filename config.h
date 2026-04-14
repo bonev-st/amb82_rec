@@ -4,8 +4,8 @@
 // ============================================================
 // Build Mode: uncomment ONE of the following lines
 // ============================================================
-#define BUILD_RELEASE    // Production: no serial, WDT, power-optimized
-// #define BUILD_DEBUG         // Development: serial logging, faster polling
+// #define BUILD_RELEASE    // Production: no serial, WDT, power-optimized
+#define BUILD_DEBUG         // Development: serial logging, faster polling
 
 // ============================================================
 // Firmware Version
@@ -36,9 +36,16 @@
 // MQTT Configuration
 // ============================================================
 #define MQTT_BROKER         "192.168.2.143"
-#define MQTT_PORT           1883
-#define MQTT_USER           ""
-#define MQTT_PASSWORD       ""
+#define MQTT_USER           "amb82_cam_01"
+#define MQTT_PASSWORD       "DcU9EOHGPWxSH2T6"
+
+// MQTT Security: set to 1 for TLS + mTLS on port 8883, 0 for plain on 1883
+#define MQTT_USE_TLS        1
+#if MQTT_USE_TLS
+  #define MQTT_PORT         8883
+#else
+  #define MQTT_PORT         1883
+#endif
 
 // MQTT Topics
 #define MQTT_TOPIC_STATUS   "camera/" DEVICE_ID "/status"

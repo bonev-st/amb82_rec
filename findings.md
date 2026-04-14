@@ -1,90 +1,79 @@
-# Findings — Power Optimization & Release Build
+# Findings — MQTT Security (mTLS + Auth)
 
-## Code Review: Power Waste Inventory
+## SDK Research: WiFiSSLClient
 
-### 1. Serial logging is always active (biggest easy win)
-- `checkMotion()` prints MD region count every 500ms — in a production device
-  this is pure waste (serial TX draws current + CPU cycles for `printf` formatting)
-- Every module (`wifi_manager`, `mqtt_manager`, `battery_monitor`) has LOG/LOGF calls
-- The existing `DEBUG_ENABLED` flag already gates `LOG`/`LOGF` macros — good foundation
-- **But:** the 2s `delay(2000)` in `setup()` and `Serial.begin()` itself are still active in release
+**Header:** `libraries/WiFi/src/WiFiSSLClient.h`
+- Extends `Client` (same base as `WiFiClient`) — drop-in for PubSubClient
+- Uses mbedTLS internally
+- Key methods:
+  ```cpp
+  void setRootCA(unsigned char *rootCA);           // PEM string — verify server cert
+  void setClientCertificate(unsigned char *cert, unsigned char *key);  // mTLS
+  void setPreSharedKey(unsigned char *pskIdent, unsigned char *psKey); // PSK (hex)
+  ```
+- SDK has working example: `libraries/MQTTClient/examples/MQTT_TLS/MQTT_TLS.ino`
+- PubSubClient takes `Client&` — WiFiSSLClient is transparent replacement
 
-### 2. Main loop timing is fixed at 100ms
-- `delay(100)` in `loop()` regardless of state
-- In `STATE_IDLE` (which is 99% of the time), nothing time-sensitive happens
-  — motion check + battery update + WiFi check can easily tolerate 500ms
-- In `STATE_STREAMING`/`STATE_POST_ROLL`, 100ms is fine for responsive state transitions
+## Implementation Decisions
 
-### 3. Channel 0 (H264 FHD 30fps) runs continuously
-- This is the **single largest power consumer** in the system
-- Comment in code explains why: dynamically toggling Ch0 produced broken H264 streams
-- **Cannot optimize without risking recording quality** — this is a known SDK limitation
-- Possible future experiment: reduce Ch0 to 15fps or HD when idle, bump to FHD 30fps on motion
+| Decision | Rationale |
+|----------|-----------|
+| Self-signed CA (10-year) | LAN-only setup, no public DNS needed |
+| mTLS (client certs) | User explicitly requested full security stack |
+| Server-side TLS + client certs + password | Belt-and-suspenders: cert authenticates device, password authorizes it |
+| Keep anonymous listener on 1883 | Backward compatibility per requirements |
+| `mqtt_certs.h` in git repo | User decision — demo project, not production secrets |
+| `per_listener_settings true` | Allows different auth rules per Mosquitto listener |
+| `use_identity_as_username false` | Use password-file username, not cert CN, for MQTT auth |
+| Recorder uses separate client cert (CN=recorder) | Different identity per service, proper cert management |
+| `begin(Client&)` in mqtt_manager | Works with both WiFiClient and WiFiSSLClient without templates |
 
-### 4. Detection channel at 10fps
-- `config.h` defines `DETECT_FPS 10` for Channel 3 (VGA RGB)
-- SDK examples use 10fps, but 5fps should be sufficient for motion detection
-- Reducing to 5fps halves the RGB processing load on the detection pipeline
+## Security Architecture
 
-### 5. Battery ADC sampling blocks for 20ms
-- `readVoltage()` reads 10 samples with `delay(2)` between each = 20ms blocked
-- Called every 60s, so total impact is low (20ms/60000ms = 0.03%)
-- Could be optimized but **not worth the complexity** for this interval
+```
+Camera (amb82_cam_01)              Broker (sbbu01.local)
++----------------------------+     +----------------------------+
+| WiFiSSLClient              |     | Mosquitto                  |
+|   CA cert (verify server)  |---->| :8883 TLS listener         |
+|   Client cert + key (mTLS) |     |   server cert + key        |
+|   Username + password      |     |   CA cert (verify clients)  |
++----------------------------+     |   password_file             |
+                                   |                            |
+Recorder (recorder)                | :1883 plain listener       |
++----------------------------+     |   allow_anonymous true     |
+| paho-mqtt + tls_set()      |---->|                            |
+|   CA cert, client cert+key |     +----------------------------+
+|   Username + password      |
++----------------------------+
+```
 
-### 6. checkConfig() creates a new TCP+MQTT connection every 60s
-- Each `pullConfig()` call: TCP connect → MQTT CONNECT → SUBSCRIBE → 3×loop() → DISCONNECT
-- This is ~200-500ms of network activity every minute
-- In release, checking every 5 minutes is sufficient (config changes are rare)
+## Certificates Generated (2026-04-13)
 
-## Release vs Debug: What Needs to Change
+| File | CN | Purpose | Validity |
+|------|----|---------|----------|
+| `ca.crt` / `ca.key` | AMB82 MQTT CA | Root CA — signs all other certs | 10 years |
+| `server.crt` / `server.key` | sbbu01.local | Broker identity | 10 years |
+| `client_camera.crt` / `client_camera.key` | amb82_cam_01 | Camera mTLS identity | 10 years |
+| `client_recorder.crt` / `client_recorder.key` | recorder | Recorder mTLS identity | 10 years |
 
-| Feature | DEBUG | RELEASE |
-|---------|-------|---------|
-| `Serial.begin()` | Yes (115200 baud) | Skip entirely |
-| Boot delay (2s) | Yes | No |
-| LOG/LOGF macros | Active | No-op (already implemented) |
-| MD count logging (500ms) | Active | No-op |
-| State transition logging | Active | No-op |
-| MQTT payload logging | Active | No-op |
-| Main loop delay | 100ms always | 500ms idle / 100ms streaming |
-| checkConfig interval | 60s | 300s (5 min) |
-| Detection FPS | 10 | 5 (power saving) |
-| Boot banner with version | Verbose | Minimal or none |
-| Firmware version in MQTT | Yes | Yes |
+## Key Gotchas
 
-## Questions for User
+1. **pullConfig() needs TLS too** — it creates a disposable WiFiClient/PubSubClient.
+   Must use WiFiSSLClient with the same certs, or the throwaway connection fails on 8883.
+   Also must pass MQTT_USER/MQTT_PASSWORD (previously connected anonymously).
 
-### Q1: Detection FPS in release — 5fps ok?
-Reducing from 10fps to 5fps saves processing power but increases the minimum
-time to detect motion start/stop from ~100ms to ~200ms. For a security camera
-this is negligible. **Recommendation: 5fps in release, 10fps in debug.**
+2. **Mosquitto `per_listener_settings true`** — required when running two listeners
+   with different auth rules. Without it, settings are global and the password_file
+   would apply to both listeners (breaking anonymous on 1883).
 
-### Q2: Main loop idle delay — 500ms ok?
-In IDLE state, increasing `delay(100)` to `delay(500)` means:
-- Motion detection response: up to 500ms slower (imperceptible for recording)
-- WiFi reconnect check: 5× less frequent (fine, it's non-blocking)
-- Battery update: unaffected (has its own 60s timer)
-**Recommendation: 500ms idle, 100ms during streaming.**
+3. **`use_identity_as_username false`** — if true, Mosquitto would use the cert CN
+   as the MQTT username, ignoring the CONNECT packet username. We want password-file
+   auth separate from cert identity.
 
-### Q3: Battery check interval for release?
-Currently 60s. On battery power, checking every 120s or even 300s is fine —
-voltage doesn't change fast. **Recommendation: 120s in release.**
+4. **PEM format in C strings** — must have `\n` at end of each line and a trailing `\n`
+   after the `-----END ...-----` line. Missing newlines cause mbedTLS parse failures.
 
-### Q4: Should RELEASE mode skip Serial entirely?
-If `Serial.begin()` is never called, the UART peripheral stays powered down.
-Downside: no way to debug a deployed unit without reflashing.
-**Recommendation: Skip Serial in release — if you need to debug, flash DEBUG build.**
-
-### Q5: Watchdog timer — desired?
-The AMB82 SDK has a `WDT` (watchdog timer) class. If the main loop hangs
-(e.g., WiFi stack deadlock), the watchdog reboots the board automatically.
-**Recommendation: Enable in release with 30s timeout. Add `WDT.refresh()` in loop.**
-
-### Q6: Firmware version scheme?
-Suggest: `FIRMWARE_VERSION "1.0.0"` in `config.h`, included in MQTT status
-messages and boot banner. Bump manually on each release.
-
-### Q7: Should config polling be disabled entirely in release?
-`checkConfig()` exists for runtime timezone changes via MQTT. If timezone is
-set once and rarely changes, we could disable polling in release and only
-read config at boot. **Recommendation: Keep but reduce to every 5 minutes.**
+5. **systemd `%h` in Environment=** — does NOT expand `%h` in `Environment=` directives.
+   Used `%%h` in the service file which systemd expands to `%h`, then the shell expands
+   `%h` at runtime. Actually for ExecStart it works, but for Environment values with paths,
+   we use `%%h` which becomes literal `%h` which systemd then expands to the home directory.

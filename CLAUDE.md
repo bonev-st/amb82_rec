@@ -253,6 +253,24 @@ uint8_t connected(void);
 // Inherits print(), println() from Print
 ```
 
+**WiFiSSLClient** (`libraries/WiFi/src/WiFiSSLClient.h`):
+```cpp
+// Extends Client — drop-in replacement for WiFiClient with TLS
+WiFiSSLClient();
+// All WiFiClient methods (connect, write, read, available, connected, stop)
+void setRootCA(unsigned char *rootCA);                    // PEM string — verify server cert
+void setClientCertificate(unsigned char *cert, unsigned char *key);  // PEM strings — mTLS
+void setPreSharedKey(unsigned char *pskIdent, unsigned char *psKey); // PSK auth (hex string)
+int setRecvTimeout(int timeout);
+```
+
+**Important:**
+- Uses mbedTLS internally
+- Compatible with PubSubClient (`setClient(Client&)` accepts WiFiSSLClient)
+- SDK bug: `WDT()` default constructor — see WDT section
+- Cert strings must be null-terminated PEM with `\n` line endings
+- SDK example: `libraries/MQTTClient/examples/MQTT_TLS/MQTT_TLS.ino`
+
 ### MQTT (PubSubClient)
 
 **Use SDK version:** `libraries/MQTTClient/src/PubSubClient.h` (has Ameba patches, MQTT_MAX_PACKET_SIZE=512)
@@ -361,6 +379,26 @@ The firmware has two build modes controlled in `config.h`:
 
 **Important:** When adding new debug output, always use `LOG()` or `LOGF()` —
 never raw `Serial.print()` or `printf()`. This ensures release builds stay silent.
+
+### MQTT Security (TLS / mTLS)
+
+Controlled by `MQTT_USE_TLS` in `config.h`:
+
+```c
+#define MQTT_USE_TLS    1   // 1 = TLS+mTLS on port 8883, 0 = plain on 1883
+```
+
+**When `MQTT_USE_TLS 1`:**
+- `WiFiSSLClient` is used instead of `WiFiClient`
+- CA cert + client cert + key loaded from `mqtt_certs.h`
+- Both the main MQTT client and the disposable pullConfig() client use TLS
+- Broker must have matching CA, server cert, and accept client certs
+
+**When `MQTT_USE_TLS 0`:**
+- Plain `WiFiClient`, no TLS overhead
+- Username/password auth still works if `MQTT_USER` is set
+
+**`mqtt_certs.h`** contains three PEM strings: `mqtt_ca_cert`, `mqtt_client_cert`, `mqtt_client_key`. Regenerate certs on the broker, copy PEM content into this file, recompile.
 
 ### Linux Server (for tests)
 ## Access to remote Linux test machine

@@ -11,6 +11,10 @@ Environment variables:
     MQTT_PORT       - Broker port (default: 1883)
     MQTT_USER       - Username (optional)
     MQTT_PASS       - Password (optional)
+    MQTT_TLS        - Enable TLS: "1" to enable (optional)
+    MQTT_CA_CERT    - Path to CA certificate PEM file (required if TLS)
+    MQTT_CLIENT_CERT - Path to client certificate PEM file (for mTLS)
+    MQTT_CLIENT_KEY  - Path to client private key PEM file (for mTLS)
     MQTT_TOPIC      - Topic pattern (default: camera/+/motion)
     CLIPS_DIR       - Output directory (default: /clips)
     MAX_DURATION    - Max recording seconds (default: 300)
@@ -25,6 +29,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import ssl
+
 import paho.mqtt.client as mqtt
 
 logging.basicConfig(
@@ -38,6 +44,10 @@ MQTT_BROKER = os.getenv("MQTT_BROKER", "localhost")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 MQTT_USER = os.getenv("MQTT_USER", "")
 MQTT_PASS = os.getenv("MQTT_PASS", "")
+MQTT_TLS = os.getenv("MQTT_TLS", "") == "1"
+MQTT_CA_CERT = os.getenv("MQTT_CA_CERT", "")
+MQTT_CLIENT_CERT = os.getenv("MQTT_CLIENT_CERT", "")
+MQTT_CLIENT_KEY = os.getenv("MQTT_CLIENT_KEY", "")
 MQTT_TOPIC = os.getenv("MQTT_TOPIC", "camera/+/motion")
 CLIPS_DIR = Path(os.getenv("CLIPS_DIR", "/clips"))
 MAX_DURATION = int(os.getenv("MAX_DURATION", "300"))
@@ -163,6 +173,7 @@ def on_message(client, userdata, msg):
 def main():
     log.info("MQTT Recorder starting")
     log.info("  Broker: %s:%d", MQTT_BROKER, MQTT_PORT)
+    log.info("  TLS: %s", "enabled" if MQTT_TLS else "disabled")
     log.info("  Topic: %s", MQTT_TOPIC)
     log.info("  Clips dir: %s", CLIPS_DIR)
     log.info("  Max duration: %ds", MAX_DURATION)
@@ -172,6 +183,20 @@ def main():
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     if MQTT_USER:
         client.username_pw_set(MQTT_USER, MQTT_PASS)
+
+    if MQTT_TLS:
+        certfile = MQTT_CLIENT_CERT if MQTT_CLIENT_CERT else None
+        keyfile = MQTT_CLIENT_KEY if MQTT_CLIENT_KEY else None
+        client.tls_set(
+            ca_certs=MQTT_CA_CERT,
+            certfile=certfile,
+            keyfile=keyfile,
+            cert_reqs=ssl.CERT_REQUIRED,
+            tls_version=ssl.PROTOCOL_TLS_CLIENT,
+        )
+        log.info("  CA cert: %s", MQTT_CA_CERT)
+        if certfile:
+            log.info("  Client cert: %s (mTLS)", certfile)
 
     client.on_connect = on_connect
     client.on_message = on_message

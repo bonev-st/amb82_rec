@@ -173,6 +173,149 @@ sudo timedatectl set-timezone Europe/Sofia   # adjust to your timezone
 ```
 For Docker deployments, set the `TZ` environment variable in `docker-compose.yml`.
 
+## MQTT Security
+
+The system supports three security levels, controlled by `config.h` on the
+device and environment variables on the recorder. All levels are backward-
+compatible — the broker runs both listeners simultaneously.
+
+| Level | Device Config | Port | Encryption | Authentication |
+|-------|--------------|------|------------|----------------|
+| 0 — Anonymous | `MQTT_USER=""`, `MQTT_USE_TLS 0` | 1883 | None | None |
+| 1 — Password | `MQTT_USER="x"`, `MQTT_USE_TLS 0` | 1883 | None | Username/password |
+| 2 — mTLS + Password | `MQTT_USER="x"`, `MQTT_USE_TLS 1` | 8883 | TLS | Client cert + password |
+
+### Switching security levels on the device
+
+Edit `config.h`:
+
+```c
+// Level 0 (anonymous):
+#define MQTT_USER       ""
+#define MQTT_PASSWORD   ""
+#define MQTT_USE_TLS    0
+
+// Level 1 (password only):
+#define MQTT_USER       "amb82_cam_01"
+#define MQTT_PASSWORD   "your-password"
+#define MQTT_USE_TLS    0
+
+// Level 2 (mTLS + password):
+#define MQTT_USER       "amb82_cam_01"
+#define MQTT_PASSWORD   "your-password"
+#define MQTT_USE_TLS    1
+```
+
+Recompile and flash after changing.
+
+### Broker setup (Mosquitto on Linux)
+
+#### Step 1 — Generate certificates (self-signed CA, 10-year validity)
+
+```bash
+mkdir -p ~/mqtt_certs && cd ~/mqtt_certs
+
+# CA key + certificate
+openssl req -new -x509 -days 3650 -extensions v3_ca \
+  -keyout ca.key -out ca.crt -nodes -subj "/CN=AMB82 MQTT CA"
+
+# Server key + certificate (CN must match broker hostname)
+openssl genrsa -out server.key 2048
+openssl req -new -key server.key -out server.csr -subj "/CN=sbbu01.local"
+openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key \
+  -CAcreateserial -out server.crt -days 3650
+
+# Client certificate for camera
+openssl genrsa -out client_camera.key 2048
+openssl req -new -key client_camera.key -out client_camera.csr \
+  -subj "/CN=amb82_cam_01"
+openssl x509 -req -in client_camera.csr -CA ca.crt -CAkey ca.key \
+  -CAcreateserial -out client_camera.crt -days 3650
+
+# Client certificate for recorder
+openssl genrsa -out client_recorder.key 2048
+openssl req -new -key client_recorder.key -out client_recorder.csr \
+  -subj "/CN=recorder"
+openssl x509 -req -in client_recorder.csr -CA ca.crt -CAkey ca.key \
+  -CAcreateserial -out client_recorder.crt -days 3650
+```
+
+#### Step 2 — Create MQTT password file
+
+```bash
+touch ~/mqtt_certs/passwd
+mosquitto_passwd -b ~/mqtt_certs/passwd amb82_cam_01 "your-camera-password"
+mosquitto_passwd -b ~/mqtt_certs/passwd recorder "your-recorder-password"
+chmod 600 ~/mqtt_certs/passwd
+```
+
+#### Step 3 — Install into Mosquitto
+
+```bash
+sudo mkdir -p /etc/mosquitto/certs
+sudo cp ~/mqtt_certs/{ca.crt,server.crt,server.key,passwd} /etc/mosquitto/certs/
+sudo chown -R mosquitto:mosquitto /etc/mosquitto/certs
+sudo chmod 600 /etc/mosquitto/certs/server.key /etc/mosquitto/certs/passwd
+```
+
+#### Step 4 — Configure Mosquitto
+
+Replace `/etc/mosquitto/conf.d/local.conf` with:
+
+```
+per_listener_settings true
+
+# Plain listener — backward-compatible anonymous access
+listener 1883 0.0.0.0
+allow_anonymous true
+
+# TLS listener — encrypted + mTLS + password auth
+listener 8883 0.0.0.0
+allow_anonymous false
+password_file /etc/mosquitto/certs/passwd
+cafile /etc/mosquitto/certs/ca.crt
+certfile /etc/mosquitto/certs/server.crt
+keyfile /etc/mosquitto/certs/server.key
+require_certificate true
+use_identity_as_username false
+```
+
+```bash
+sudo systemctl restart mosquitto
+```
+
+#### Step 5 — Verify
+
+```bash
+# Anonymous on 1883 (should work)
+mosquitto_pub -h 127.0.0.1 -p 1883 -t test -m "hello"
+
+# TLS + mTLS + auth on 8883
+mosquitto_pub -h 127.0.0.1 -p 8883 \
+  --cafile ~/mqtt_certs/ca.crt \
+  --cert ~/mqtt_certs/client_camera.crt \
+  --key ~/mqtt_certs/client_camera.key \
+  -u amb82_cam_01 -P "your-camera-password" \
+  -t test -m "hello secure"
+```
+
+### Updating device certificates
+
+The CA and client certificates are embedded in `mqtt_certs.h` as PEM strings.
+To update them (e.g., after regenerating certs), copy the PEM content into
+the `mqtt_ca_cert`, `mqtt_client_cert`, and `mqtt_client_key` constants,
+recompile, and flash.
+
+### Updating recorder certificates
+
+Recorder certs live at `~/amb82_recorder/certs/` on the server. The systemd
+service environment variables point to them. After replacing cert files,
+restart the recorder:
+
+```bash
+systemctl --user restart amb82-recorder
+```
+
 ## Firmware Modules
 
 | File | Purpose |

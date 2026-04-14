@@ -2,11 +2,11 @@
 
 MqttManager* MqttManager::_instance = nullptr;
 
-void MqttManager::begin(WiFiClient& wifiClient, NTPClient& timeClient) {
+void MqttManager::begin(Client& netClient, NTPClient& timeClient) {
     _timeClient = &timeClient;
     _instance = this;
 
-    _client.setClient(wifiClient);
+    _client.setClient(netClient);
     _client.setServer(MQTT_BROKER, MQTT_PORT);
     // No setCallback on main client — calling loop() on Ameba's WiFiClient
     // blocks indefinitely and corrupts the connection for subsequent publishes.
@@ -52,7 +52,14 @@ void MqttManager::pullConfig() {
     // corrupts the Ameba WiFiClient state and breaks subsequent publishes.
     // A throwaway client avoids that entirely — it connects, grabs the
     // retained message, disconnects, and goes out of scope.
+#if MQTT_USE_TLS
+    WiFiSSLClient cfgWifi;
+    cfgWifi.setRootCA((unsigned char*)mqtt_ca_cert);
+    cfgWifi.setClientCertificate((unsigned char*)mqtt_client_cert,
+                                 (unsigned char*)mqtt_client_key);
+#else
     WiFiClient cfgWifi;
+#endif
     PubSubClient cfgClient;
     cfgClient.setClient(cfgWifi);
     cfgClient.setServer(MQTT_BROKER, MQTT_PORT);
@@ -60,7 +67,7 @@ void MqttManager::pullConfig() {
     cfgClient.setKeepAlive(15);
     cfgClient.setSocketTimeout(2);
 
-    if (!cfgClient.connect(DEVICE_ID "_cfg")) {
+    if (!cfgClient.connect(DEVICE_ID "_cfg", MQTT_USER, MQTT_PASSWORD)) {
         LOG("[MQTT] pullConfig: connect failed");
         return;
     }

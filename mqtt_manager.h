@@ -6,9 +6,15 @@
 #include "src/PubSubClient.h"  // Force SDK-patched version over user-installed stock copy
 #include "config.h"
 
+#if MQTT_USE_TLS
+#include <WiFiSSLClient.h>
+#include "mqtt_certs.h"
+#endif
+
 class MqttManager {
 public:
-    void begin(WiFiClient& wifiClient, NTPClient& timeClient);
+    // Accepts Client& — works with both WiFiClient and WiFiSSLClient
+    void begin(Client& netClient, NTPClient& timeClient);
     bool ensureConnected();
     void loop();  // Call in main loop for keepalive
 
