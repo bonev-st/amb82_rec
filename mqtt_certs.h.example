@@ -1,0 +1,34 @@
+#ifndef MQTT_CERTS_H
+#define MQTT_CERTS_H
+
+// ============================================================
+// MQTT TLS Certificates (PEM format) — TEMPLATE
+//
+// Copy this file to mqtt_certs.h (gitignored) and paste in the
+// PEM contents produced by server/certs/generate-all.sh:
+//   ca.crt                        → mqtt_ca_cert
+//   client_amb82_cam_01.crt       → mqtt_client_cert
+//   client_amb82_cam_01.key       → mqtt_client_key
+//
+// Formatting requirements (strict):
+//   - Null-terminated C strings
+//   - Every line ends with \n (use backslash-continuation style below)
+//   - Include the BEGIN/END markers
+// ============================================================
+
+static const char* mqtt_ca_cert = \
+"-----BEGIN CERTIFICATE-----\n" \
+"...paste ca.crt contents here, one line per PEM line, each with \\n...\n" \
+"-----END CERTIFICATE-----\n";
+
+static const char* mqtt_client_cert = \
+"-----BEGIN CERTIFICATE-----\n" \
+"...paste client_amb82_cam_01.crt contents here...\n" \
+"-----END CERTIFICATE-----\n";
+
+static const char* mqtt_client_key = \
+"-----BEGIN PRIVATE KEY-----\n" \
+"...paste client_amb82_cam_01.key contents here...\n" \
+"-----END PRIVATE KEY-----\n";
+
+#endif // MQTT_CERTS_H

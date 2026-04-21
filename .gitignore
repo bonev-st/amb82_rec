@@ -2,3 +2,16 @@
 /.theia
 /amb82_clips
 /seq
+__pycache__
+*.pyc
+
+# Secrets — never commit. See secrets.h.example.
+# Note: mqtt_certs.h remains tracked for now — the embedded CA+client key
+# is a credential; rotating and untracking is a user decision. See
+# mqtt_certs.h.example for the expected template shape.
+secrets.h
+
+# Transient planning artifacts
+findings.md
+progress.md
+task_plan.md
