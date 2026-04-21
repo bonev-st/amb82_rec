@@ -53,10 +53,19 @@ Two on-board LEDs report live status without needing a serial monitor.
 1. Install Arduino IDE
 2. Add Ameba board package URL: `https://github.com/ambiot/ambpro2_arduino`
 3. Select board **AMB82 Mini**
-4. Edit `config.h` -- set WiFi credentials, MQTT broker IP
-5. Select build mode (see below)
-6. Remove any user-installed PubSubClient from Arduino libraries (use SDK version)
-7. Compile and upload via USB
+4. Copy `secrets.h.example` -> `secrets.h` and fill in WiFi SSID/password and
+   MQTT broker IP / user / password. `secrets.h` is gitignored. When
+   `MQTT_USE_TLS=1` (the default in `config.h`), `MQTT_BROKER` **must** be an
+   IPv4 literal -- mbedTLS 2.28 on this platform cannot verify hostname SANs,
+   and the firmware logs a fatal error at boot if it detects a hostname.
+5. If using TLS (default), copy `mqtt_certs.h.example` -> `mqtt_certs.h` and
+   paste in the CA + client cert + client key PEMs produced by
+   `server/certs/generate-all.sh`. See "MQTT Security" below for details.
+6. Adjust `config.h` as needed (device ID, build mode, thresholds,
+   `MQTT_USE_TLS`). WiFi/MQTT credentials are **not** in this file.
+7. Select build mode (see below)
+8. Remove any user-installed PubSubClient from Arduino libraries (use SDK version)
+9. Compile and upload via USB
 
 ## Build Modes (DEBUG / RELEASE)
 
@@ -211,40 +220,53 @@ For Docker deployments, set the `TZ` environment variable in `docker-compose.yml
 
 ## MQTT Security
 
-The system supports three security levels, controlled by `config.h` on the
-device and environment variables on the recorder. All levels are backward-
-compatible -- the broker runs both listeners simultaneously.
+The system supports three security levels, controlled by `secrets.h` +
+`config.h` on the device and environment variables on the recorder. All levels
+are backward-compatible -- the broker runs both listeners simultaneously.
 
 | Level | Device Config | Port | Encryption | Authentication |
 |-------|--------------|------|------------|----------------|
-| 0 -- Anonymous | `MQTT_USER=""`, `MQTT_USE_TLS 0` | 1883 | None | None |
-| 1 -- Password | `MQTT_USER="x"`, `MQTT_USE_TLS 0` | 1883 | None | Username/password |
-| 2 -- mTLS + Password | `MQTT_USER="x"`, `MQTT_USE_TLS 1` | 8883 | TLS | Client cert + password |
+| 0 -- Anonymous | `MQTT_USER=""` (secrets.h), `MQTT_USE_TLS 0` (config.h) | 1883 | None | None |
+| 1 -- Password | `MQTT_USER="x"` (secrets.h), `MQTT_USE_TLS 0` (config.h) | 1883 | None | Username/password |
+| 2 -- mTLS + Password | `MQTT_USER="x"` (secrets.h), `MQTT_USE_TLS 1` (config.h) | 8883 | TLS | Client cert + password |
 
 ### Switching security levels on the device
 
-Edit `config.h`:
+`MQTT_USER` and `MQTT_PASSWORD` live in `secrets.h` (gitignored). `MQTT_USE_TLS`
+lives in `config.h`.
+
+In `secrets.h`:
 
 ```c
 // Level 0 (anonymous):
 #define MQTT_USER       ""
 #define MQTT_PASSWORD   ""
-#define MQTT_USE_TLS    0
 
-// Level 1 (password only):
+// Level 1 or 2 (authenticated):
 #define MQTT_USER       "amb82_cam_01"
 #define MQTT_PASSWORD   "your-password"
-#define MQTT_USE_TLS    0
-
-// Level 2 (mTLS + password):
-#define MQTT_USER       "amb82_cam_01"
-#define MQTT_PASSWORD   "your-password"
-#define MQTT_USE_TLS    1
 ```
 
-Recompile and flash after changing.
+In `config.h`:
+
+```c
+#define MQTT_USE_TLS    0   // Level 0 or 1 -- plain on port 1883
+// or
+#define MQTT_USE_TLS    1   // Level 2 -- TLS + mTLS on port 8883
+```
+
+For Level 2, also populate `mqtt_certs.h` (see above). Recompile and flash
+after changing.
 
 ### Broker setup (Mosquitto on Linux)
+
+> **Shortcut:** `server/certs/generate-all.sh` automates Steps 1-2 (CA, server
+> cert, per-client certs, Mosquitto password file) and
+> `server/certs/install-broker.sh` automates Steps 3-4 (deploy to
+> `/etc/mosquitto/`, write `secure.conf`, restart the broker). See
+> `server/certs/README.md`. The manual steps below are the equivalent
+> walk-through if you prefer to do it by hand or want to understand what the
+> scripts do.
 
 #### Step 1 -- Generate certificates (self-signed CA, 10-year validity)
 
