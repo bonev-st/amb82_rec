@@ -1,6 +1,6 @@
 # AMB82 Mini Motion-Triggered RTSP Streamer
 
-Motion-triggered RTSP video streamer for the Ameba AMB82 Mini camera board. Detects motion via the on-board camera pipeline, starts an RTSP stream on demand, and notifies a Linux server via MQTT to begin recording. No local SD card storage required.
+Motion-triggered video recorder for the Ameba AMB82 Mini camera board. The camera runs an RTSP stream (Ch0, FHD H264) continuously; when on-board motion detection (Ch3, RGB) fires, the firmware publishes an MQTT event with the RTSP URL so a Linux server can pull and record the clip. No local SD card storage required.
 
 ## Architecture
 
@@ -13,7 +13,7 @@ AMB82 Mini                              Linux Server
 |                       |               | recorder.py               |
 | Ch0 (FHD,H264,30fps)  |               |   subscribes to MQTT      |
 |   -> RTSP server <----+--RTSP pull----+   spawns FFmpeg on start  |
-|      (on demand)      |  rtsp://:554  |   kills FFmpeg on stop    |
+|      (always on)      |  rtsp://:554  |   kills FFmpeg on stop    |
 |                       |               |   saves MP4 clips         |
 | MQTT client           |               |                           |
 | Battery monitor       |               | Home Assistant            |
@@ -24,15 +24,36 @@ AMB82 Mini                              Linux Server
 ## Hardware
 
 - **Board:** Ameba AMB82 Mini (Realtek RTL8735B, ARM Cortex-M33)
-- **Power:** Battery (LiPo) or USB — supports both modes
-- **No SD card needed** — video is stored on the server
+- **Power:** Battery (LiPo) or USB -- supports both modes
+- **No SD card needed** -- video is stored on the server
+
+### LED indicators
+
+Two on-board LEDs report live status without needing a serial monitor.
+
+**Green** (`LED_G`, PE_6) -- motion / record state:
+
+| State | Meaning |
+|---|---|
+| Off | No motion; server is not recording. |
+| Blink 0.5 s / 0.5 s | Motion detected by the algorithm, but the server has not yet been notified (MQTT publish pending/retrying). |
+| Solid on | Motion notified -- server is (or was) recording. Stays on during post-roll. |
+
+**Blue** (`LED_BUILTIN`, PF_9) -- system health. Priority ladder, highest first:
+
+| State | Meaning |
+|---|---|
+| Solid on | WiFi not associated. |
+| Blink 0.5 s / 0.5 s | WiFi OK, but NTP has not produced a valid epoch yet (TLS will fail until it does). |
+| Blink 0.5 s on / 3.0 s off | WiFi + NTP OK, but the MQTT broker is not connected. |
+| Off | All OK. |
 
 ## Build & Flash
 
 1. Install Arduino IDE
 2. Add Ameba board package URL: `https://github.com/ambiot/ambpro2_arduino`
 3. Select board **AMB82 Mini**
-4. Edit `config.h` — set WiFi credentials, MQTT broker IP
+4. Edit `config.h` -- set WiFi credentials, MQTT broker IP
 5. Select build mode (see below)
 6. Remove any user-installed PubSubClient from Arduino libraries (use SDK version)
 7. Compile and upload via USB
@@ -69,14 +90,15 @@ The firmware supports two build modes controlled by a single `#define` in
 
 ### When to use each mode
 
-- **DEBUG** — bench testing, serial monitor attached, diagnosing motion detection
+- **DEBUG** -- bench testing, serial monitor attached, diagnosing motion detection
   sensitivity, verifying MQTT payloads
-- **RELEASE** — deployed camera running on battery, no serial monitor, maximum
+- **RELEASE** -- deployed camera running on battery, no serial monitor, maximum
   battery life, watchdog auto-recovery from hangs
 
 ## Server Setup
 
 ### Requirements
+
 - Linux machine (Raspberry Pi 4+, VM, or any Linux box)
 - Docker and Docker Compose
 - 2+ GB RAM, storage for clips
@@ -89,21 +111,31 @@ docker compose up -d
 ```
 
 This starts:
-- **Mosquitto** (port 1883) — MQTT broker
-- **recorder** — MQTT-triggered FFmpeg recorder, saves clips to `server/clips/`
+- **Mosquitto** (port 1883) -- MQTT broker
+- **recorder** -- MQTT-triggered FFmpeg recorder, saves clips to `server/clips/`
 
 ### How Recording Works
 
-1. Camera detects motion locally (Ch3, low-res RGB)
-2. Camera starts RTSP stream (Ch0, 1080p H264)
-3. Camera publishes MQTT: `{"motion":true, "rtsp":"rtsp://192.168.1.x:554"}`
-4. `recorder.py` receives MQTT, spawns FFmpeg to record from RTSP URL
-5. Motion ends, camera publishes `{"motion":false}`
-6. `recorder.py` sends SIGTERM to FFmpeg (MP4 finalized cleanly)
-7. Clip saved to `server/clips/<device_id>/<date>/<timestamp>.mp4`
-8. Clip metadata published back to MQTT for Home Assistant
+The camera's Ch0 H264 encoder and RTSP server run continuously -- dynamically
+toggling them per motion event produced stuck/static-image clips in testing,
+so they stay alive. The motion event is purely an MQTT notification that
+tells the server when to start/stop the ffmpeg pull.
+
+1. Camera detects motion locally (Ch3, low-res RGB).
+2. Camera publishes MQTT: `{"motion":true, "rtsp":"rtsp://192.168.1.x:554"}`.
+3. `recorder.py` receives MQTT, spawns FFmpeg to pull the already-running
+   RTSP stream.
+4. Motion ends (plus post-roll), camera publishes `{"motion":false}`.
+5. `recorder.py` sends SIGTERM to FFmpeg so the MP4 is finalized cleanly.
+6. Clip saved to `server/clips/<device_id>/<date>/<timestamp>.mp4`.
+7. Clip metadata published back to MQTT for Home Assistant.
+
+A background reaper in `recorder.py` also finalizes any clip whose FFmpeg
+process exited on its own (hit `-t MAX_DURATION`, lost RTSP, crashed) so
+capped recordings are not lost if the firmware's stop event never arrives.
 
 ### Clips Directory Structure
+
 ```
 server/clips/
   amb82_cam_01/
@@ -127,20 +159,23 @@ server/clips/
 
 The device defaults to UTC but the timezone can be changed at runtime via a
 **retained** MQTT message on the config topic. The device reads this message on
-every connect/reconnect — no reboot required after publishing.
+every connect/reconnect -- no reboot required after publishing.
 
 **Set timezone** (example: UTC+2, i.e. 7200 seconds):
+
 ```bash
 # Use printf + stdin piping to avoid shell escaping issues (especially over SSH)
 printf '{"timezone_offset":7200}' | mosquitto_pub -h 192.168.2.143 -t camera/amb82_cam_01/config -r -l
 ```
 
 **Reset to UTC:**
+
 ```bash
 printf '{"timezone_offset":0}' | mosquitto_pub -h 192.168.2.143 -t camera/amb82_cam_01/config -r -l
 ```
 
 **Via SSH to the test system:**
+
 ```bash
 printf '{"timezone_offset":7200}' | ssh test-system 'mosquitto_pub -h 127.0.0.1 -t camera/amb82_cam_01/config -r -l'
 ```
@@ -161,29 +196,30 @@ MQTT connection at boot and once per minute during idle. A separate
 `WiFiClient`/`PubSubClient` pair is used so the main MQTT publish client is never
 affected. The parsed `timezone_offset` is applied to the NTPClient via
 `setTimeOffset()`, adjusting `getEpochTime()` and all timestamps in MQTT payloads
-(motion events, status reports, battery alerts). The compile-time default in
-`config.h` (`NTP_TIMEZONE_OFFSET`) is used only until the first retained config
-message is received.
+(motion events, status reports, battery alerts). The firmware boots in UTC
+(offset 0) and stays in UTC until the first retained config message is received.
 
 **Server-side timezone:** Clip filenames and `start_time`/`end_time` in clip
 metadata are generated by `recorder.py` using the server's system clock. Set the
 server timezone to match:
+
 ```bash
 sudo timedatectl set-timezone Europe/Sofia   # adjust to your timezone
 ```
+
 For Docker deployments, set the `TZ` environment variable in `docker-compose.yml`.
 
 ## MQTT Security
 
 The system supports three security levels, controlled by `config.h` on the
 device and environment variables on the recorder. All levels are backward-
-compatible — the broker runs both listeners simultaneously.
+compatible -- the broker runs both listeners simultaneously.
 
 | Level | Device Config | Port | Encryption | Authentication |
 |-------|--------------|------|------------|----------------|
-| 0 — Anonymous | `MQTT_USER=""`, `MQTT_USE_TLS 0` | 1883 | None | None |
-| 1 — Password | `MQTT_USER="x"`, `MQTT_USE_TLS 0` | 1883 | None | Username/password |
-| 2 — mTLS + Password | `MQTT_USER="x"`, `MQTT_USE_TLS 1` | 8883 | TLS | Client cert + password |
+| 0 -- Anonymous | `MQTT_USER=""`, `MQTT_USE_TLS 0` | 1883 | None | None |
+| 1 -- Password | `MQTT_USER="x"`, `MQTT_USE_TLS 0` | 1883 | None | Username/password |
+| 2 -- mTLS + Password | `MQTT_USER="x"`, `MQTT_USE_TLS 1` | 8883 | TLS | Client cert + password |
 
 ### Switching security levels on the device
 
@@ -210,13 +246,13 @@ Recompile and flash after changing.
 
 ### Broker setup (Mosquitto on Linux)
 
-#### Step 1 — Generate certificates (self-signed CA, 10-year validity)
+#### Step 1 -- Generate certificates (self-signed CA, 10-year validity)
 
 ```bash
 mkdir -p ~/mqtt_certs && cd ~/mqtt_certs
 
 # CA key + self-signed cert WITH proper CA:TRUE extension.
-# (Note: plain `-extensions v3_ca` does NOT set CA:TRUE without a config file —
+# (Note: plain `-extensions v3_ca` does NOT set CA:TRUE without a config file --
 # mbedTLS on the ESP/AMB82 rejects CAs without basicConstraints=CA:TRUE.)
 openssl genrsa -out ca.key 2048
 openssl req -new -x509 -days 3650 -key ca.key -out ca.crt \
@@ -256,7 +292,7 @@ openssl x509 -req -in client_recorder.csr -CA ca.crt -CAkey ca.key \
   -CAcreateserial -out client_recorder.crt -days 3650
 ```
 
-#### Step 2 — Create MQTT password file
+#### Step 2 -- Create MQTT password file
 
 ```bash
 touch ~/mqtt_certs/passwd
@@ -265,7 +301,7 @@ mosquitto_passwd -b ~/mqtt_certs/passwd recorder "your-recorder-password"
 chmod 600 ~/mqtt_certs/passwd
 ```
 
-#### Step 3 — Install into Mosquitto
+#### Step 3 -- Install into Mosquitto
 
 ```bash
 sudo mkdir -p /etc/mosquitto/certs
@@ -274,18 +310,18 @@ sudo chown -R mosquitto:mosquitto /etc/mosquitto/certs
 sudo chmod 600 /etc/mosquitto/certs/server.key /etc/mosquitto/certs/passwd
 ```
 
-#### Step 4 — Configure Mosquitto
+#### Step 4 -- Configure Mosquitto
 
 Replace `/etc/mosquitto/conf.d/local.conf` with:
 
 ```
 per_listener_settings true
 
-# Plain listener — backward-compatible anonymous access
+# Plain listener -- backward-compatible anonymous access
 listener 1883 0.0.0.0
 allow_anonymous true
 
-# TLS listener — encrypted + mTLS + password auth
+# TLS listener -- encrypted + mTLS + password auth
 listener 8883 0.0.0.0
 allow_anonymous false
 password_file /etc/mosquitto/certs/passwd
@@ -300,7 +336,7 @@ use_identity_as_username false
 sudo systemctl restart mosquitto
 ```
 
-#### Step 5 — Verify
+#### Step 5 -- Verify
 
 ```bash
 # Anonymous on 1883 (should work)
@@ -346,13 +382,14 @@ systemctl --user restart amb82-recorder
 
 Standalone test sketches in `tests/`, one per module. Open in Arduino IDE, set WiFi credentials where needed, flash, and watch Serial Monitor at 115200 baud.
 
-**WiFi credentials** — test sketches that need WiFi (`test_wifi`, `test_ntp`, `test_rtsp`, `test_mqtt`) include a shared header `wifi_def.h` rather than hardcoding SSID/password in each sketch. It lives as a user library at:
+**WiFi credentials** -- test sketches that need WiFi (`test_wifi`, `test_ntp`, `test_rtsp`, `test_mqtt`) include a shared header `wifi_def.h` rather than hardcoding SSID/password in each sketch. It lives as a user library at:
 
 ```
 C:\Work\Arduino\libraries\wifi_def\wifi_def.h
 ```
 
 with contents:
+
 ```c
 #ifndef WIFI_DEF_H
 #define WIFI_DEF_H
@@ -363,7 +400,7 @@ with contents:
 #endif
 ```
 
-Edit that file once and every test sketch picks up the new credentials. The file is intentionally **not** checked into this repo — keep real credentials out of version control.
+Edit that file once and every test sketch picks up the new credentials. The file is intentionally **not** checked into this repo -- keep real credentials out of version control.
 
 | # | Sketch | What it tests | Needs |
 |---|--------|---------------|-------|
@@ -383,6 +420,7 @@ point it at the full `server/` Docker stack, at `test.mosquitto.org:1883`, or at
 a bare Mosquitto install on any LAN machine.
 
 **Bare Mosquitto on Debian/Ubuntu (ARM64 or x86_64):**
+
 ```bash
 sudo apt update
 sudo apt install -y mosquitto mosquitto-clients
@@ -400,24 +438,29 @@ ss -tln | grep 1883
 ```
 
 If `ufw` is active, also open the port:
+
 ```bash
 sudo ufw allow 1883/tcp
 ```
 
 **Bare Mosquitto on Windows 11:**
-1. Install from https://mosquitto.org/download/
+1. Install from <https://mosquitto.org/download/>
 2. Edit `C:\Program Files\mosquitto\mosquitto.conf` (as Administrator) and append:
+
    ```
    listener 1883 0.0.0.0
    allow_anonymous true
    ```
+
 3. Start the service and open the firewall (Admin PowerShell):
+
    ```powershell
    net start mosquitto
    New-NetFirewallRule -DisplayName "Mosquitto MQTT" -Direction Inbound -Protocol TCP -LocalPort 1883 -Action Allow
    ```
 
-**Point the sketch at your broker** — in `tests/test_mqtt/test_mqtt.ino`:
+**Point the sketch at your broker** -- in `tests/test_mqtt/test_mqtt.ino`:
+
 ```c
 #define MQTT_BROKER "192.168.x.y"   // Your broker LAN IP
 #define MQTT_PORT   1883
@@ -426,11 +469,12 @@ sudo ufw allow 1883/tcp
 ```
 
 **Verify the roundtrip from any LAN machine with `mosquitto-clients`:**
+
 ```bash
-# Terminal A — watch everything the firmware publishes
+# Terminal A -- watch everything the firmware publishes
 mosquitto_sub -h 192.168.x.y -t 'amb82_test/#' -v
 
-# Terminal B — inject a command to trigger the sketch's subscribe callback
+# Terminal B -- inject a command to trigger the sketch's subscribe callback
 mosquitto_pub -h 192.168.x.y -t amb82_test/cmd -m 'hello'
 ```
 
