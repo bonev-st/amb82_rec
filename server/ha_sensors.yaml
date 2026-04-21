@@ -1,0 +1,32 @@
+# Home Assistant MQTT sensor definitions for the AMB82 Motion Camera.
+#
+# Include from configuration.yaml via:
+#   mqtt: !include ha_sensors.yaml
+#
+# Matches the topic + payload schema published by the firmware and
+# server/recorder/recorder.py.
+
+sensor:
+  - name: "Camera Battery"
+    state_topic: "camera/amb82_cam_01/status"
+    value_template: "{{ value_json.battery_pct }}"
+    unit_of_measurement: "%"
+    device_class: battery
+    json_attributes_topic: "camera/amb82_cam_01/status"
+
+  - name: "Camera RSSI"
+    state_topic: "camera/amb82_cam_01/status"
+    value_template: "{{ value_json.rssi }}"
+    unit_of_measurement: "dBm"
+    device_class: signal_strength
+
+  - name: "Camera Availability"
+    state_topic: "camera/amb82_cam_01/availability"
+
+binary_sensor:
+  - name: "Camera Motion Active"
+    state_topic: "camera/amb82_cam_01/motion"
+    value_template: "{{ value_json.motion }}"
+    payload_on: true
+    payload_off: false
+    device_class: motion

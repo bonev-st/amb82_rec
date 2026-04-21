@@ -1,39 +1,49 @@
-version: "3.8"
+# Development stack for the recorder + HA. Plain MQTT (no TLS), anonymous,
+# host port bound to 127.0.0.1 only. Intended for local recorder iteration,
+# NOT for production firmware connectivity -- that path uses bare-metal
+# mosquitto configured by server/certs/install-broker.sh.
 
 services:
-  # MQTT Broker
   mosquitto:
     image: eclipse-mosquitto:2
     container_name: mosquitto
     restart: unless-stopped
+    init: true
     ports:
-      - "1883:1883"
-      - "9001:9001"
+      - "127.0.0.1:1883:1883"
     volumes:
       - ./mosquitto/config:/mosquitto/config
       - ./mosquitto/data:/mosquitto/data
       - ./mosquitto/log:/mosquitto/log
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h localhost -p 1883 -t '$$SYS/#' -C 1 -W 5"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
 
-  # MQTT-triggered FFmpeg recorder
   recorder:
     build: ./recorder
     container_name: recorder
     restart: unless-stopped
+    init: true
     depends_on:
-      - mosquitto
+      mosquitto:
+        condition: service_healthy
     environment:
       MQTT_BROKER: mosquitto
       MQTT_PORT: "1883"
-      MQTT_USER: ""              # Set if broker requires auth
+      MQTT_USER: ""
       MQTT_PASS: ""
       MQTT_TOPIC: "camera/+/motion"
       CLIPS_DIR: /clips
-      MAX_DURATION: "300"        # Safety cap: 5 minutes max per clip
-      TZ: "Europe/Sofia"         # Timezone for clip filenames and timestamps
+      MAX_DURATION: "300"
+      RTSP_STIMEOUT_US: "5000000"
+      MIN_CLIP_BYTES: "4096"
+      TZ: "Europe/Sofia"
     volumes:
       - ./clips:/clips
 
-  # Home Assistant (optional — comment out if using existing instance)
   homeassistant:
     image: ghcr.io/home-assistant/home-assistant:stable
     container_name: homeassistant

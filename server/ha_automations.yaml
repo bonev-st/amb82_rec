@@ -1,39 +1,14 @@
 # Home Assistant Automations for AMB82 Motion Camera
-# Add these to your Home Assistant automations.yaml or via the UI
-
-# ============================================================
-# MQTT Sensors (add to configuration.yaml)
-# ============================================================
-# mqtt:
-#   sensor:
-#     - name: "Camera Battery"
-#       state_topic: "camera/amb82_cam_01/battery"
-#       value_template: "{{ value_json.battery_pct }}"
-#       unit_of_measurement: "%"
-#       device_class: battery
 #
-#     - name: "Camera Status"
-#       state_topic: "camera/amb82_cam_01/status"
-#       value_template: "{{ value_json.battery_pct }}"
-#       json_attributes_topic: "camera/amb82_cam_01/status"
-#
-#     - name: "Camera Motion"
-#       state_topic: "camera/amb82_cam_01/motion"
-#       value_template: "{{ value_json.motion }}"
-#
-#     - name: "Camera Availability"
-#       state_topic: "camera/amb82_cam_01/availability"
-#
-#   binary_sensor:
-#     - name: "Camera Motion Active"
-#       state_topic: "camera/amb82_cam_01/motion"
-#       value_template: "{{ value_json.motion }}"
-#       payload_on: "true"
-#       payload_off: "false"
-#       device_class: motion
+# Paste the entries below into your automations.yaml. MQTT sensor/binary_sensor
+# definitions for this camera live in ha_sensors.yaml (include from
+# configuration.yaml via `mqtt: !include ha_sensors.yaml`).
 
 # ============================================================
 # Automation: New Video Clip Notification
+# ------------------------------------------------------------
+# Trigger payload (published by server/recorder/recorder.py):
+#   device, filename, path, size_bytes, duration_s, start_time, end_time
 # ============================================================
 - id: camera_new_clip_notification
   alias: "Camera: New Video Clip"
@@ -43,15 +18,19 @@
   action:
     - service: notify.notify
       data:
-        title: "Motion Detected — New Clip"
+        title: "Motion Detected -- New Clip"
         message: >
           Camera {{ trigger.payload_json.device }} recorded a
-          {{ trigger.payload_json.duration_s }}s clip.
-          File: {{ trigger.payload_json.filename }}
-          Battery: {{ trigger.payload_json.battery_pct }}%
+          {{ trigger.payload_json.duration_s }}s clip
+          ({{ (trigger.payload_json.size_bytes / 1048576) | round(1) }} MB):
+          {{ trigger.payload_json.filename }}
 
 # ============================================================
-# Automation: Low Battery Alert
+# Automation: Low / Critical Battery Alert
+# ------------------------------------------------------------
+# Trigger payload (published retained by firmware battery_monitor):
+#   device, alert (OK|LOW|CRITICAL), battery_pct, battery_v, timestamp
+# Only LOW and CRITICAL fire a user notification; OK clears retained state.
 # ============================================================
 - id: camera_low_battery_alert
   alias: "Camera: Low Battery Alert"
@@ -71,6 +50,27 @@
           {{ trigger.payload_json.battery_pct }}%
           ({{ trigger.payload_json.battery_v }}V).
           {{ 'Charge immediately!' if trigger.payload_json.alert == 'CRITICAL' else 'Consider charging soon.' }}
+
+# ============================================================
+# Automation: Recording Failure Alert
+# ------------------------------------------------------------
+# Trigger payload (published by recorder.py when a clip is too small):
+#   device, error, size_bytes, start_time
+# ============================================================
+- id: camera_recording_failure_alert
+  alias: "Camera: Recording Failure"
+  trigger:
+    - platform: mqtt
+      topic: "camera/amb82_cam_01/alert"
+  action:
+    - service: notify.notify
+      data:
+        title: "Camera Recording Failed"
+        message: >
+          {{ trigger.payload_json.device }} clip at
+          {{ trigger.payload_json.start_time }} failed
+          ({{ trigger.payload_json.size_bytes }} bytes).
+          Check RTSP connectivity.
 
 # ============================================================
 # Automation: Camera Offline Alert

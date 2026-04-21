@@ -18,18 +18,21 @@ Environment variables:
     MQTT_TOPIC      - Topic pattern (default: camera/+/motion)
     CLIPS_DIR       - Output directory (default: /clips)
     MAX_DURATION    - Max recording seconds (default: 300)
+    RTSP_STIMEOUT_US - RTSP socket timeout in microseconds (default: 5000000)
+    MIN_CLIP_BYTES  - Drop clips smaller than this as failed (default: 4096)
 """
 
 import json
 import logging
 import os
+import re
 import signal
+import ssl
 import subprocess
 import sys
-from datetime import datetime
+import threading
+from datetime import datetime, timezone
 from pathlib import Path
-
-import ssl
 
 import paho.mqtt.client as mqtt
 
@@ -51,33 +54,68 @@ MQTT_CLIENT_KEY = os.getenv("MQTT_CLIENT_KEY", "")
 MQTT_TOPIC = os.getenv("MQTT_TOPIC", "camera/+/motion")
 CLIPS_DIR = Path(os.getenv("CLIPS_DIR", "/clips"))
 MAX_DURATION = int(os.getenv("MAX_DURATION", "300"))
+RTSP_STIMEOUT_US = int(os.getenv("RTSP_STIMEOUT_US", "5000000"))  # 5s
+MIN_CLIP_BYTES = int(os.getenv("MIN_CLIP_BYTES", "4096"))
 
-# Track active recordings: device_id -> {"process": Popen, "path": str}
+DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+# active_recordings: device_id -> dict. Touched from the paho network
+# thread (on_message), the reaper thread, and the main thread (shutdown),
+# so always acquire _recordings_lock before reading/writing.
 active_recordings = {}
+_recordings_lock = threading.Lock()
 
 
-def start_recording(device_id: str, rtsp_url: str):
+def _drain_stderr_to_file(pipe, log_path: Path):
+    """Consume FFmpeg stderr line-by-line and write to a sidecar .log file.
+
+    Running in a dedicated thread. Without this, a full stderr pipe buffer
+    will block FFmpeg mid-recording.
+    """
+    try:
+        with open(log_path, "ab") as f:
+            for line in iter(pipe.readline, b""):
+                f.write(line)
+    except Exception as e:  # best-effort
+        log.warning("stderr drain failed for %s: %s", log_path, e)
+    finally:
+        try:
+            pipe.close()
+        except Exception:
+            pass
+
+
+def start_recording(device_id: str, rtsp_url: str, mqtt_client):
     """Spawn FFmpeg to record from RTSP stream."""
-    if device_id in active_recordings:
-        log.warning("Already recording for %s, ignoring duplicate start", device_id)
-        return
+    with _recordings_lock:
+        existing = active_recordings.get(device_id)
+    if existing is not None:
+        # Duplicate motion-start: the previous FFmpeg may be dead or may
+        # be recording from a stale URL (camera IP changed). Stop it
+        # first AND publish its clip metadata so we don't silently lose
+        # the previous recording.
+        log.warning("Duplicate motion-start for %s -- finalizing previous recording first",
+                    device_id)
+        _stop_recording_internal(device_id, publish_clip=True, mqtt_client=mqtt_client)
 
-    # Create date-based output directory
     today = datetime.now().strftime("%Y-%m-%d")
     out_dir = CLIPS_DIR / device_id / today
     out_dir.mkdir(parents=True, exist_ok=True)
 
     timestamp = datetime.now().strftime("%H-%M-%S")
     out_path = out_dir / f"{device_id}_{timestamp}.mp4"
+    log_path = out_dir / f"{device_id}_{timestamp}.ffmpeg.log"
 
     cmd = [
         "ffmpeg",
+        "-hide_banner",
+        "-loglevel", "warning",
         "-rtsp_transport", "tcp",
+        "-stimeout", str(RTSP_STIMEOUT_US),   # fail fast when RTSP stalls
         "-i", rtsp_url,
-        "-c", "copy",              # No re-encoding — passthrough H264
-        "-t", str(MAX_DURATION),   # Safety cap
-        "-movflags", "+faststart",
-        "-y",                      # Overwrite if exists
+        "-c", "copy",                         # passthrough H264, no re-encode
+        "-t", str(MAX_DURATION),              # safety cap
+        "-y",
         str(out_path),
     ]
 
@@ -88,55 +126,129 @@ def start_recording(device_id: str, rtsp_url: str):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
         )
+    except FileNotFoundError:
+        log.error("ffmpeg not found -- is it installed?")
+        return
+    except Exception as e:
+        log.error("Failed to start FFmpeg: %s", e)
+        return
+
+    drain_thread = threading.Thread(
+        target=_drain_stderr_to_file,
+        args=(proc.stderr, log_path),
+        daemon=True,
+    )
+    drain_thread.start()
+
+    with _recordings_lock:
         active_recordings[device_id] = {
             "process": proc,
             "path": str(out_path),
-            "start_time": datetime.now().isoformat(),
+            "log_path": str(log_path),
+            "start_time": datetime.now(timezone.utc),
+            "drain_thread": drain_thread,
         }
-        log.info("FFmpeg started (PID %d) for %s", proc.pid, device_id)
-    except FileNotFoundError:
-        log.error("ffmpeg not found — is it installed?")
-    except Exception as e:
-        log.error("Failed to start FFmpeg: %s", e)
+    log.info("FFmpeg started (PID %d) for %s", proc.pid, device_id)
 
 
-def stop_recording(device_id: str, mqtt_client):
-    """Gracefully stop FFmpeg recording."""
-    rec = active_recordings.pop(device_id, None)
+def _stop_recording_internal(device_id: str, publish_clip: bool, mqtt_client):
+    """Stop the active recording and optionally publish clip metadata.
+
+    Returns the recording dict (popped) or None if nothing was active.
+    """
+    with _recordings_lock:
+        rec = active_recordings.pop(device_id, None)
     if rec is None:
-        log.warning("No active recording for %s", device_id)
-        return
+        return None
 
     proc = rec["process"]
     log.info("Stopping recording for %s (PID %d)", device_id, proc.pid)
 
-    # Send SIGTERM for graceful shutdown (FFmpeg finalizes MP4 muxing)
-    proc.send_signal(signal.SIGTERM)
-    try:
-        proc.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        log.warning("FFmpeg didn't stop in 10s, killing")
-        proc.kill()
-        proc.wait()
+    if proc.poll() is None:
+        proc.send_signal(signal.SIGTERM)
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            log.warning("FFmpeg didn't stop in 10s, killing")
+            proc.kill()
+            proc.wait()
+
+    # Give the drain thread a brief moment to flush remaining stderr.
+    rec["drain_thread"].join(timeout=1.0)
 
     clip_path = rec["path"]
-    clip_size = 0
-    if os.path.exists(clip_path):
-        clip_size = os.path.getsize(clip_path)
+    clip_size = os.path.getsize(clip_path) if os.path.exists(clip_path) else 0
 
-    log.info("Recording saved: %s (%d bytes)", clip_path, clip_size)
+    # Drop tiny/empty clips -- usually means FFmpeg never connected or the
+    # stream died immediately. Leaving them around silently fills the disk.
+    if clip_size < MIN_CLIP_BYTES:
+        log.warning("Clip %s is %d bytes (< %d); deleting as failed",
+                    clip_path, clip_size, MIN_CLIP_BYTES)
+        try:
+            os.remove(clip_path)
+        except OSError:
+            pass
+        if publish_clip and mqtt_client is not None:
+            mqtt_client.publish(
+                f"camera/{device_id}/alert",
+                json.dumps({
+                    "device": device_id,
+                    "error": "recording_failed",
+                    "size_bytes": clip_size,
+                    "start_time": rec["start_time"].isoformat(),
+                }),
+            )
+        return rec
 
-    # Publish clip metadata back to MQTT
-    clip_topic = f"camera/{device_id}/clip"
-    clip_payload = json.dumps({
-        "device": device_id,
-        "file": clip_path,
-        "size_bytes": clip_size,
-        "start_time": rec["start_time"],
-        "end_time": datetime.now().isoformat(),
-    })
-    mqtt_client.publish(clip_topic, clip_payload)
-    log.info("Published clip metadata to %s", clip_topic)
+    end_time = datetime.now(timezone.utc)
+    duration_s = round((end_time - rec["start_time"]).total_seconds(), 1)
+    log.info("Recording saved: %s (%d bytes, %.1fs)", clip_path, clip_size, duration_s)
+
+    if publish_clip and mqtt_client is not None:
+        clip_topic = f"camera/{device_id}/clip"
+        clip_payload = json.dumps({
+            "device": device_id,
+            "filename": os.path.basename(clip_path),
+            "path": clip_path,
+            "size_bytes": clip_size,
+            "duration_s": duration_s,
+            "start_time": rec["start_time"].isoformat(),
+            "end_time": end_time.isoformat(),
+        })
+        mqtt_client.publish(clip_topic, clip_payload)
+        log.info("Published clip metadata to %s", clip_topic)
+
+    return rec
+
+
+def stop_recording(device_id: str, mqtt_client):
+    """Public wrapper that logs when there's nothing to stop."""
+    rec = _stop_recording_internal(device_id, publish_clip=True, mqtt_client=mqtt_client)
+    if rec is None:
+        log.warning("No active recording for %s", device_id)
+
+
+def _reaper_loop(mqtt_client, stop_event: threading.Event):
+    """Periodically check for FFmpeg processes that have exited on their own.
+
+    Without this, clips that finish because -t MAX_DURATION was reached --
+    or because ffmpeg crashed / RTSP died -- would sit in active_recordings
+    until the firmware happens to publish motion=false, which may never
+    happen if the firmware rebooted mid-stream.
+    """
+    while not stop_event.wait(timeout=5.0):
+        with _recordings_lock:
+            dead = [(dev, rec["process"].returncode)
+                    for dev, rec in active_recordings.items()
+                    if rec["process"].poll() is not None]
+        for device_id, rc in dead:
+            log.info("FFmpeg for %s exited on its own (rc=%s) -- finalizing",
+                     device_id, rc)
+            try:
+                _stop_recording_internal(device_id, publish_clip=True,
+                                         mqtt_client=mqtt_client)
+            except Exception as e:
+                log.error("Reaper: error finalizing %s: %s", device_id, e)
 
 
 def on_connect(client, userdata, flags, reason_code, properties=None):
@@ -146,27 +258,42 @@ def on_connect(client, userdata, flags, reason_code, properties=None):
 
 
 def on_message(client, userdata, msg):
+    # Retained motion-start messages would re-trigger recording on every
+    # reconnect with a possibly-stale RTSP URL. Firmware publishes these
+    # non-retained today; this guard keeps us safe if that ever changes.
+    if msg.retain:
+        log.debug("Ignoring retained message on %s", msg.topic)
+        return
+
     try:
         payload = json.loads(msg.payload.decode())
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
         log.warning("Invalid payload on %s: %s", msg.topic, e)
         return
 
-    # Extract device_id from topic: camera/<device_id>/motion
     parts = msg.topic.split("/")
     if len(parts) < 3:
         log.warning("Unexpected topic format: %s", msg.topic)
         return
     device_id = parts[1]
+    if not DEVICE_ID_RE.fullmatch(device_id):
+        log.warning("Rejected device_id %r from topic %s", device_id, msg.topic)
+        return
 
     motion = payload.get("motion", False)
     rtsp_url = payload.get("rtsp", "")
 
     log.info("Motion event: device=%s motion=%s rtsp=%s", device_id, motion, rtsp_url)
 
-    if motion and rtsp_url:
-        start_recording(device_id, rtsp_url)
-    elif not motion:
+    if motion:
+        # Only accept plain rtsp:// URLs. FFmpeg accepts many other schemes
+        # (concat:, file:, ...) that could be abused to read server-local
+        # files if a broker-authenticated attacker publishes.
+        if not rtsp_url.startswith("rtsp://"):
+            log.warning("Rejecting non-rtsp URL for %s: %r", device_id, rtsp_url)
+            return
+        start_recording(device_id, rtsp_url, client)
+    else:
         stop_recording(device_id, client)
 
 
@@ -203,18 +330,41 @@ def main():
 
     client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
 
-    # Handle graceful shutdown
-    def shutdown(signum, frame):
-        log.info("Shutting down — stopping active recordings")
-        for device_id in list(active_recordings):
+    # Signal handlers just disconnect the MQTT loop; the real cleanup runs
+    # on the main thread after loop_forever() returns. Doing MQTT publishes
+    # inside a signal handler is fragile with paho's network thread.
+    def _signal(signum, _frame):
+        log.info("Signal %s received -- requesting shutdown", signum)
+        try:
+            client.disconnect()
+        except Exception:
+            pass
+
+    signal.signal(signal.SIGINT, _signal)
+    signal.signal(signal.SIGTERM, _signal)
+
+    reaper_stop = threading.Event()
+    reaper_thread = threading.Thread(
+        target=_reaper_loop, args=(client, reaper_stop), daemon=True,
+    )
+    reaper_thread.start()
+
+    try:
+        client.loop_forever()
+    finally:
+        reaper_stop.set()
+        reaper_thread.join(timeout=10.0)
+
+    # Graceful shutdown on the main thread.
+    log.info("Shutting down -- stopping active recordings")
+    with _recordings_lock:
+        device_ids = list(active_recordings.keys())
+    for device_id in device_ids:
+        try:
             stop_recording(device_id, client)
-        client.disconnect()
-        sys.exit(0)
-
-    signal.signal(signal.SIGINT, shutdown)
-    signal.signal(signal.SIGTERM, shutdown)
-
-    client.loop_forever()
+        except Exception as e:
+            log.error("Error stopping %s: %s", device_id, e)
+    sys.exit(0)
 
 
 if __name__ == "__main__":
