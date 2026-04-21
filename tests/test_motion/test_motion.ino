@@ -1,7 +1,7 @@
 /*
  * Test 7: Motion Detection (RTSP Architecture)
  * Verifies: MotionDetection on Ch3 (RGB), configVideo, StreamIO, getResult
- * Needs: Board only — wave hand in front of camera to trigger
+ * Needs: Board only -- wave hand in front of camera to trigger
  *
  * Based on SDK example: MotionDetection/LoopPostProcessing
  */
@@ -53,12 +53,12 @@ void setup() {
     Camera.videoInit();
     reportTest("Camera videoInit()", true);
 
-    // Configure motion detection — no setTriggerBlockCount (matches SDK example)
+    // Configure motion detection -- no setTriggerBlockCount (matches SDK example)
     MD.configVideo(configMD);
     MD.begin();
     reportTest("MD.configVideo() + begin()", true);
 
-    // Connect StreamIO: Camera Ch3 → MD
+    // Connect StreamIO: Camera Ch3 -> MD
     videoStreamerMD.registerInput(Camera.getStream(CH_DETECT));
     videoStreamerMD.setStackSize();
     videoStreamerMD.registerOutput(MD);

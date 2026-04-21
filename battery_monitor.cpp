@@ -29,11 +29,14 @@ void BatteryMonitor::update() {
         _currentAlertState = 0;
     }
 
-    // Edge detection: alert only on transition to worse state
-    _newAlert = (_currentAlertState > _prevAlertState);
+    // Fire on any state transition (including recovery). The alert is
+    // published retained, so recovery -> OK overwrites a stale CRITICAL on
+    // the broker. HA filters actionable alerts via the "LOW"/"CRITICAL"
+    // condition server-side.
+    _newAlert = (_currentAlertState != _prevAlertState);
 
     if (_newAlert) {
-        LOGF("[Battery] ALERT: %.2fV (%d%%) — %s\n",
+        LOGF("[Battery] ALERT: %.2fV (%d%%) -- %s\n",
              _voltage, _percentage, getAlertLevel());
     }
 }

@@ -145,7 +145,7 @@ void setup() {
 
     // Test 7: Subscribe + round-trip via own callback.
     // Subscribe return value is unreliable (same brittle rc check), so score
-    // the whole subscribe/publish/callback round-trip as one assertion —
+    // the whole subscribe/publish/callback round-trip as one assertion --
     // that's the only thing that actually proves end-to-end MQTT works.
     bool subOk = mqtt.subscribe(TOPIC_TEST_SUB);
     printf("[TEST] subscribe(%s): ret=%s state=%d\n",
@@ -172,7 +172,7 @@ void setup() {
     printf("\n[TEST] Disconnect...\n");
     mqtt.disconnect();
     delay(500);
-    reportTest("disconnect() — connected() is false", !mqtt.connected());
+    reportTest("disconnect() -- connected() is false", !mqtt.connected());
 
     printf("[TEST] Reconnecting...\n");
     bool reconnected;

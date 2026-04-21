@@ -2,9 +2,17 @@
  * AMB82 Mini Motion-Triggered RTSP Streamer
  *
  * Detects motion via on-board camera pipeline (Channel 3, RGB).
- * On motion: starts RTSP stream (Channel 0, H264 FHD) and notifies
- * the server via MQTT to begin recording.
- * After post-roll: stops RTSP stream, notifies server to stop.
+ *
+ * RTSP streaming model: the Ch0 H264 FHD encoder and the RTSP server run
+ * CONTINUOUSLY from boot. Dynamically re-starting them per motion event
+ * produced decodable-but-static streams (cached IDR), so we leave them
+ * always-on. Motion events become MQTT notifications that tell the server
+ * "now is an interesting moment to record from :554 for a while"; the
+ * recorder pulls the stream on demand.
+ *
+ * Tradeoff: Ch0 encoder power is spent even when no clip is being recorded.
+ * Acceptable for the current battery target; reconsider if a working
+ * start/stop sequence is found.
  *
  * Based on official Ameba Arduino SDK examples:
  *   - MotionDetection/CallbackPostProcessing
@@ -19,11 +27,11 @@
 #include <VideoStream.h>
 #include <RTSP.h>
 #include <MotionDetection.h>
-#include <time.h>
+#include <time.h>  // time_t for rtc_write signature below
 // rtc_write() from rtc_api.h is the SDK-linkable symbol (in liboutsrc.a)
 // that writes the hardware RTC. mbedTLS reads from this RTC to check cert
 // notBefore/notAfter during TLS handshake. Note: set_time() declared in
-// rtc_time.h is NOT compiled into the platform libs — use rtc_write().
+// rtc_time.h is NOT compiled into the platform libs -- use rtc_write().
 extern "C" void rtc_init(void);
 extern "C" void rtc_write(time_t t);
 
@@ -31,6 +39,7 @@ extern "C" void rtc_write(time_t t);
 #include "wifi_manager.h"
 #include "mqtt_manager.h"
 #include "battery_monitor.h"
+#include "led_manager.h"
 
 #if WDT_ENABLED
 #include <WDT.h>
@@ -49,17 +58,20 @@ VideoSetting configMD(VIDEO_VGA, DETECT_FPS, VIDEO_RGB, 0);
 RTSP rtsp;
 MotionDetection motionDet;
 
-StreamIO videoToRtsp(1, 1);     // Camera Ch0 → RTSP
-StreamIO videoToMotion(1, 1);   // Camera Ch3 → MotionDetection
+StreamIO videoToRtsp(1, 1);     // Camera Ch0 -> RTSP
+StreamIO videoToMotion(1, 1);   // Camera Ch3 -> MotionDetection
 
 // NTP
 WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, NTP_SERVER, NTP_TIMEZONE_OFFSET, NTP_UPDATE_INTERVAL);
+// Start in UTC; timezone is set at runtime by the MQTT config message
+// (see MqttManager::mqttCallback -> timeClient.setTimeOffset).
+NTPClient timeClient(ntpUDP, NTP_SERVER, 0, NTP_UPDATE_INTERVAL);
 
 // Managers
 WifiManager wifiMgr;
 MqttManager mqttMgr;
 BatteryMonitor batteryMon;
+LedManager ledMgr;
 
 #if MQTT_USE_TLS
 WiFiSSLClient mqttWifiClient;
@@ -77,24 +89,48 @@ char rtspUrl[64] = {0};
 // ============================================================
 // State Machine
 // ============================================================
-enum StreamingState {
-    STATE_IDLE,         // Waiting for motion (detection channel running)
-    STATE_STREAMING,    // RTSP active, motion ongoing
-    STATE_POST_ROLL     // Motion ended, RTSP still active for post-roll
+enum MotionRecordState {
+    STATE_IDLE,          // no motion; server is not recording
+    STATE_MOTION_ACTIVE, // motion detected, server has been told to record
+    STATE_POST_ROLL      // motion stopped, server still recording the tail
 };
 
-StreamingState streamState = STATE_IDLE;
+MotionRecordState streamState = STATE_IDLE;
 unsigned long motionEndTime = 0;
 unsigned long streamStartTime = 0;
 unsigned long lastStatusTime = 0;
+
+// true after a successful motion-start publish, false after a successful
+// motion-end publish. Drives the green LED (solid = server was notified,
+// blink = motion detected but notification didn't get through).
+bool startPublished = false;
+
+// Set once, when a valid NTP epoch is first written to the hardware RTC.
+// Used to keep the RTC write idempotent and to drive the blue status LED.
+bool rtcInitialized = false;
+
+// Write the NTP epoch to the hardware RTC the first time we see a valid
+// value. mbedTLS reads the RTC (via time()) to check cert notBefore/notAfter
+// during TLS handshake -- without this, every cert looks "not yet valid"
+// and handshake fails with -0x2700. Called from setup() and from loop()
+// after each successful timeClient.update() so recovery works even when
+// boot-time NTP fails.
+static void ensureRTC() {
+    if (rtcInitialized) return;
+    unsigned long epoch = timeClient.getEpochTime();
+    if (epoch < NTP_VALID_EPOCH_MIN) return;
+    rtc_init();
+    rtc_write((time_t)epoch);
+    rtcInitialized = true;
+    LOGF("[RTC] System time set to epoch %lu\n", epoch);
+}
 
 // ============================================================
 // Setup
 // ============================================================
 void setup() {
-    // LED pin first, matching test_motion.ino setup order
-    pinMode(REC_LED_PIN, OUTPUT);
-    digitalWrite(REC_LED_PIN, LOW);
+    // LEDs first -- both pins driven LOW so neither floats during early boot.
+    ledMgr.begin(REC_LED_PIN, STATUS_LED_PIN);
 
 #ifndef BUILD_RELEASE
     Serial.begin(SERIAL_BAUD);
@@ -105,43 +141,67 @@ void setup() {
     LOG("========================================");
 
     // ----------------------------------------------------------
-    // Phase A — WiFi first
-    // RTSP server binds to a network socket; rtsp.begin() must NOT be
-    // called before WiFi is up or the sketch hangs.
-    // Matches SDK MotionDetection/LoopPostProcessing.ino ordering.
+    // Phase A0 -- Watchdog (RELEASE only)
+    // Start the WDT BEFORE WiFi so a hung boot can reset itself. Refresh
+    // it inside the WiFi retry loop so a normal retry doesn't trip it.
     // ----------------------------------------------------------
-    wifiMgr.begin();
+#if WDT_ENABLED
+    wdt.init(WDT_TIMEOUT_MS);
+    wdt.start();
+    LOG("[WDT] Watchdog started (30s timeout)");
+#endif
+
+    // ----------------------------------------------------------
+    // Phase A -- WiFi, with bounded retry
+    // rtsp.begin() below binds a socket and hangs forever if WiFi isn't
+    // up, so we don't proceed until association succeeds. In RELEASE the
+    // WDT reboots the board if retries are exhausted; in DEBUG we warn
+    // and proceed so the developer gets a log instead of a silent hang.
+    // ----------------------------------------------------------
+    const int WIFI_BOOT_MAX_ATTEMPTS = 12;  // ~12 x (8s timeout + 5s delay) ~= 156s
+    bool wifiOk = false;
+    for (int attempt = 1; attempt <= WIFI_BOOT_MAX_ATTEMPTS; attempt++) {
+        if (wifiMgr.begin()) { wifiOk = true; break; }
+        LOGF("[WiFi] Boot attempt %d/%d failed; retrying in 5 s...\n",
+             attempt, WIFI_BOOT_MAX_ATTEMPTS);
+#if WDT_ENABLED
+        wdt.refresh();
+#endif
+        delay(5000);
+    }
+    if (!wifiOk) {
+#if WDT_ENABLED
+        LOG("[WiFi] FATAL: no WiFi after all boot attempts; waiting for WDT reset");
+        while (1) { delay(1000); }  // don't refresh; WDT fires within 30 s
+#else
+        LOG("[WiFi] WARNING: no WiFi after all boot attempts; proceeding (RTSP may hang)");
+#endif
+    }
 
     timeClient.begin();
-    for (int attempt = 1; attempt <= 5; attempt++) {
+    // Two snappy attempts at boot. If both fail, RTC stays unset and
+    // ensureRTC() in the main loop writes it as soon as NTP recovers.
+    for (int attempt = 1; attempt <= 2; attempt++) {
         if (timeClient.forceUpdate()) {
             LOGF("[NTP] Synced: %s (attempt %d)\n",
                  timeClient.getFormattedTime().c_str(), attempt);
             break;
         }
-        LOGF("[NTP] Sync failed (attempt %d/5)\n", attempt);
-        if (attempt < 5) delay(2000);
+        LOGF("[NTP] Sync failed (attempt %d/2)\n", attempt);
+        if (attempt < 2) delay(500);
     }
-
-    // Write the NTP epoch to the hardware RTC. mbedTLS reads from the RTC
-    // (via time()) to check cert notBefore/notAfter during TLS handshake.
-    // Without this, every cert looks "not yet valid" → -0x2700 handshake fail.
-    unsigned long epoch = timeClient.getEpochTime();
-    if (epoch > 1704067200UL) {  // sanity: after 2024-01-01
-        rtc_init();
-        rtc_write((time_t)epoch);
-        LOGF("[RTC] System time set to epoch %lu\n", epoch);
-    } else {
-        LOG("[RTC] WARNING: NTP epoch invalid, RTC not set — TLS will fail");
+    ensureRTC();
+    if (!rtcInitialized) {
+        LOG("[RTC] WARNING: NTP epoch invalid at boot; will retry from loop -- TLS unavailable until then");
     }
 
     // ----------------------------------------------------------
-    // Phase B — Camera + RTSP + Motion Detection
+    // Phase B -- Camera + RTSP + Motion Detection
     // BOTH Ch0 (H264) and Ch3 (RGB) are configured and started once at
     // boot and run continuously. Dynamically toggling Ch0/RTSP between
     // motion events produced RTSP clips that decoded as a static image
     // (the re-started Ch0 encoder emitted one cached sample). Keeping
-    // Ch0 + RTSP + Ch0→RTSP pipeline alive permanently matches the SDK
+    // Ch0 + RTSP + Ch0->RTSP pipeline alive permanently matches the SDK
     // example and gives a clean H264 stream on every motion event.
     // ----------------------------------------------------------
     configStream.setBitrate(RTSP_BITRATE);
@@ -149,7 +209,7 @@ void setup() {
     Camera.configVideoChannel(DETECT_CHANNEL, configMD);
     Camera.videoInit();
 
-    // RTSP server + Ch0 → RTSP pipeline (WiFi is already up).
+    // RTSP server + Ch0 -> RTSP pipeline (WiFi is already up).
     rtsp.configVideo(configStream);
     rtsp.begin();
     videoToRtsp.registerInput(Camera.getStream(RTSP_CHANNEL));
@@ -175,7 +235,7 @@ void setup() {
     LOGF("[Setup] Initial MD count: %u\n", motionDet.getResultCount());
 
     // ----------------------------------------------------------
-    // Phase C — Battery + MQTT (after camera/RTSP are live)
+    // Phase C -- Battery + MQTT (after camera/RTSP are live)
     // ----------------------------------------------------------
     batteryMon.begin();
 
@@ -189,16 +249,7 @@ void setup() {
 #endif
     mqttMgr.begin(mqttWifiClient, timeClient);
 
-    // ----------------------------------------------------------
-    // Phase D — Watchdog (release builds only)
-    // ----------------------------------------------------------
-#if WDT_ENABLED
-    wdt.init(WDT_TIMEOUT_MS);
-    wdt.start();
-    LOG("[WDT] Watchdog started (30s timeout)");
-#endif
-
-    LOG("[Setup] Complete — entering motion detection loop");
+    LOG("[Setup] Complete -- entering motion detection loop");
     LOG("========================================\n");
 
     mqttMgr.publishStatus(batteryMon.getPercentage(), batteryMon.getVoltage(), wifiMgr.getRSSI());
@@ -211,11 +262,11 @@ void setup() {
 void loop() {
     unsigned long now = millis();
 
-    // Motion detection state machine — always first, never blocked.
+    // Motion detection state machine -- always first, never blocked.
     bool motionDetected = checkMotion();
-    handleStreamingState(motionDetected, now);
+    handleMotionRecordState(motionDetected, now);
 
-    // Battery monitoring — update() has its own 60s throttle
+    // Battery monitoring -- update() has its own 60s throttle
     batteryMon.update();
     if (batteryMon.hasNewAlert()) {
         mqttMgr.publishBatteryAlert(
@@ -235,10 +286,10 @@ void loop() {
         );
     }
 
-    // IMPORTANT: mqttMgr.loop() and mqttMgr.ensureConnected() are
-    // DELIBERATELY absent from the main loop. On the Ameba-patched
-    // PubSubClient / WiFiClient stack these calls block the main task
-    // indefinitely (~45 s at a time) which freezes motion detection.
+    // IMPORTANT: there is no mqttMgr.loop() call (and MqttManager no longer
+    // exposes one). On the Ameba-patched PubSubClient / WiFiClient stack,
+    // calling loop() blocks the main task for tens of seconds at a time
+    // which freezes motion detection.
     // Instead:
     //   - MqttManager::begin() calls setKeepAlive(0), so the broker never
     //     disconnects us for keepalive timeout.
@@ -251,12 +302,30 @@ void loop() {
     if (streamState == STATE_IDLE) {
         wifiMgr.ensureConnected();
         timeClient.update();    // re-sync NTP (self-throttled to once per hour)
+        ensureRTC();            // write RTC the first time NTP produces a valid epoch
         mqttMgr.checkConfig();  // poll for timezone/config updates
     }
 
 #if WDT_ENABLED
     wdt.refresh();
 #endif
+
+    // LED indicators (non-blocking). Green: motion/record. Blue: system health.
+    ledMgr.setGreen(
+        streamState == STATE_IDLE
+            ? LedManager::LED_OFF
+            : (startPublished ? LedManager::LED_ON : LedManager::LED_BLINK_FAST)
+    );
+    if (WiFi.status() != WL_CONNECTED) {
+        ledMgr.setBlue(LedManager::LED_ON);
+    } else if (!rtcInitialized) {
+        ledMgr.setBlue(LedManager::LED_BLINK_FAST);
+    } else if (!mqttMgr.connected()) {
+        ledMgr.setBlue(LedManager::LED_BLINK_SLOW);
+    } else {
+        ledMgr.setBlue(LedManager::LED_OFF);
+    }
+    ledMgr.update();
 
     // Adaptive delay: save power when idle, stay responsive during streaming
     delay(streamState == STATE_IDLE ? LOOP_DELAY_IDLE_MS : LOOP_DELAY_ACTIVE_MS);
@@ -268,15 +337,11 @@ void loop() {
 bool checkMotion() {
     uint16_t count = motionDet.getResultCount();
 #ifndef BUILD_RELEASE
-    // Verbose MD logging: every count change + every 500ms heartbeat.
-    // Debug only — serial I/O and printf formatting waste power.
+    // Log only on count change so the console isn't drowned by idle heartbeats.
     static uint16_t lastCount = 0xFFFF;
-    static unsigned long lastPrint = 0;
-    unsigned long now = millis();
-    if (count != lastCount || now - lastPrint >= 500) {
-        LOGF("[MD] regions=%u%s\n", count, count ? "" : " .");
+    if (count != lastCount) {
+        LOGF("[MD] regions=%u\n", count);
         lastCount = count;
-        lastPrint = now;
     }
 #endif
     return count >= MOTION_DETECT_SENSITIVITY;
@@ -285,45 +350,53 @@ bool checkMotion() {
 // ============================================================
 // Streaming State Machine
 // ============================================================
-void handleStreamingState(bool motionDetected, unsigned long now) {
+void handleMotionRecordState(bool motionDetected, unsigned long now) {
     switch (streamState) {
         case STATE_IDLE:
             if (motionDetected) {
-                startStreaming();
-                streamState = STATE_STREAMING;
-                LOG("[State] IDLE -> STREAMING");
+                // Transition only when the server was successfully notified,
+                // otherwise stay in IDLE and retry next tick. The motion-
+                // reconnect gate in MqttManager rate-limits the retries.
+                if (onMotionStart()) {
+                    streamState = STATE_MOTION_ACTIVE;
+                    LOG("[State] IDLE -> MOTION_ACTIVE");
+                }
             }
             break;
 
-        case STATE_STREAMING:
+        case STATE_MOTION_ACTIVE:
             if (!motionDetected) {
                 motionEndTime = now;
                 streamState = STATE_POST_ROLL;
-                LOG("[State] STREAMING -> POST_ROLL (10s countdown)");
+                LOG("[State] MOTION_ACTIVE -> POST_ROLL (10s countdown)");
             }
             break;
 
         case STATE_POST_ROLL:
             if (motionDetected) {
-                streamState = STATE_STREAMING;
-                LOG("[State] POST_ROLL -> STREAMING (motion resumed)");
+                streamState = STATE_MOTION_ACTIVE;
+                LOG("[State] POST_ROLL -> MOTION_ACTIVE (motion resumed)");
             } else if (now - motionEndTime >= MOTION_POST_ROLL_MS) {
-                stopStreaming();
-                streamState = STATE_IDLE;
-                LOG("[State] POST_ROLL -> IDLE");
+                // Same gating as STATE_IDLE -> STATE_MOTION_ACTIVE: only return
+                // to IDLE once we've confirmed the recorder knows to stop.
+                if (onMotionEnd()) {
+                    streamState = STATE_IDLE;
+                    LOG("[State] POST_ROLL -> IDLE");
+                }
             }
             break;
     }
 }
 
 // ============================================================
-// RTSP Stream Control
+// Motion event notification
 // ============================================================
-// Ch0, RTSP server, and Ch0→RTSP pipeline run continuously from boot
-// (see setup()). These functions are pure state-machine transitions —
-// they publish the motion event, drive the LED, and track duration.
-// The RTSP stream is *always* available on :554.
-void startStreaming() {
+// Ch0, RTSP server, and Ch0->RTSP pipeline run continuously from boot
+// (see setup()). onMotionStart / onMotionEnd just publish the MQTT event
+// and track duration; the RTSP stream is *always* available on :554.
+// Return value reflects whether the publish was accepted by the TCP
+// stack -- the state machine uses it to decide whether to advance.
+bool onMotionStart() {
     streamStartTime = millis();
 
     // Build RTSP URL (IP may have changed after reconnect).
@@ -331,16 +404,20 @@ void startStreaming() {
              WiFi.localIP().get_address(), rtsp.getPort());
     LOGF("[RTSP] Motion-start: %s\n", rtspUrl);
 
-    mqttMgr.publishMotionEvent(true, rtspUrl);
-    digitalWrite(REC_LED_PIN, HIGH);
+    bool ok = mqttMgr.publishMotionEvent(true, rtspUrl);
+    if (ok) startPublished = true;
+    return ok;
 }
 
-void stopStreaming() {
+bool onMotionEnd() {
     unsigned long durationMs = millis() - streamStartTime;
     LOGF("[RTSP] Motion-stop after %.1f seconds\n", durationMs / 1000.0f);
 
-    mqttMgr.publishMotionEvent(false, NULL);
+    bool ok = mqttMgr.publishMotionEvent(false, NULL);
+    if (!ok) return false;
+
+    startPublished = false;
     mqttMgr.publishStatus(batteryMon.getPercentage(), batteryMon.getVoltage(), wifiMgr.getRSSI());
     lastStatusTime = millis();  // Reset hourly timer so we don't double-publish
-    digitalWrite(REC_LED_PIN, LOW);
+    return true;
 }

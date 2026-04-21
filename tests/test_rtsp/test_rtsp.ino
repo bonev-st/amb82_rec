@@ -3,7 +3,7 @@
  * Verifies: RTSP begin/end, stream URL, dynamic start/stop
  * Needs: Board + WiFi
  *
- * How to verify: open VLC on PC → Media → Open Network Stream →
+ * How to verify: open VLC on PC -> Media -> Open Network Stream ->
  *   rtsp://<camera-ip>:<port>
  * The URL is printed to Serial Monitor.
  */

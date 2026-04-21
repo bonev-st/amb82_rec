@@ -85,9 +85,9 @@ void setup() {
     const char* levelOk = (75 > BATTERY_LOW_PCT) ? "OK" : "LOW";
     const char* levelLow = (15 <= BATTERY_LOW_PCT && 15 > BATTERY_CRITICAL_PCT) ? "LOW" : "WRONG";
     const char* levelCrit = (5 <= BATTERY_CRITICAL_PCT) ? "CRITICAL" : "WRONG";
-    printf("[TEST] 75%% → %s (expect OK)\n", levelOk);
-    printf("[TEST] 15%% → %s (expect LOW)\n", levelLow);
-    printf("[TEST] 5%%  → %s (expect CRITICAL)\n", levelCrit);
+    printf("[TEST] 75%% -> %s (expect OK)\n", levelOk);
+    printf("[TEST] 15%% -> %s (expect LOW)\n", levelLow);
+    printf("[TEST] 5%%  -> %s (expect CRITICAL)\n", levelCrit);
     reportTest("Alert: 75% = OK", strcmp(levelOk, "OK") == 0);
     reportTest("Alert: 15% = LOW", strcmp(levelLow, "LOW") == 0);
     reportTest("Alert: 5% = CRITICAL", strcmp(levelCrit, "CRITICAL") == 0);

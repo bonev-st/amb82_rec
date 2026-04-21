@@ -12,7 +12,7 @@
 // To regenerate, see README.md "MQTT Security" section.
 // ============================================================
 
-// CA certificate — used to verify the broker's server certificate
+// CA certificate -- used to verify the broker's server certificate
 // Regenerated 2026-04-14 with basicConstraints=CA:TRUE (mbedTLS requirement)
 static const char* mqtt_ca_cert = \
 "-----BEGIN CERTIFICATE-----\n" \
@@ -35,7 +35,7 @@ static const char* mqtt_ca_cert = \
 "XwU7PoWKCdw2AEfK2D/C19EqY9uV1zlR8oVy/afGgtptHz+CBw==\n" \
 "-----END CERTIFICATE-----\n";
 
-// Client certificate — presented to broker for mTLS authentication
+// Client certificate -- presented to broker for mTLS authentication
 // Re-signed 2026-04-14 by regenerated CA (same client key)
 static const char* mqtt_client_cert = \
 "-----BEGIN CERTIFICATE-----\n" \
@@ -58,7 +58,7 @@ static const char* mqtt_client_cert = \
 "ERQ1\n" \
 "-----END CERTIFICATE-----\n";
 
-// Client private key — keep secret, used for mTLS handshake
+// Client private key -- keep secret, used for mTLS handshake
 static const char* mqtt_client_key = \
 "-----BEGIN PRIVATE KEY-----\n" \
 "MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDQXxF5Wj7cvEaa\n" \

@@ -4,6 +4,22 @@
   http://knolleary.net
 */
 
+// ============================================================
+// NOTES FOR THIS REPO (vendored copy)
+//
+// This file is a vendored copy of the Ameba SDK's patched PubSubClient
+// (libraries/MQTTClient/src/PubSubClient.h) placed under src/ so the
+// sketch picks it up instead of the user's generic
+// ~/Documents/Arduino/libraries/PubSubClient. The Ameba version carries
+// platform patches (see the `#ifdef ARDUINO_AMEBA` MQTT_PCN00x blocks
+// below) and a larger MQTT_MAX_PACKET_SIZE (512 instead of 256) which
+// the project depends on.
+//
+// If the upstream SDK ever updates these patches, re-copy its PubSubClient
+// over this one. Do NOT delete the src/ copy without first verifying the
+// user-library path no longer shadows the SDK version.
+// ============================================================
+
 #ifndef PubSubClient_h
 #define PubSubClient_h
 

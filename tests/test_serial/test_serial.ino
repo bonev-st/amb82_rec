@@ -82,7 +82,7 @@ void setup() {
     printf("\n========================================\n");
     printf(" Results: %d PASS, %d FAIL\n", passCount, failCount);
     printf("========================================\n");
-    printf("\n[TEST] LED blink starting — verify visually\n");
+    printf("\n[TEST] LED blink starting -- verify visually\n");
 }
 
 void loop() {

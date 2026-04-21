@@ -1,6 +1,10 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+// WIFI_* and MQTT_BROKER/USER/PASSWORD live in secrets.h (gitignored).
+// Copy secrets.h.example -> secrets.h and fill in real values.
+#include "secrets.h"
+
 // ============================================================
 // Build Mode: uncomment ONE of the following lines
 // ============================================================
@@ -25,19 +29,15 @@
 #define DEVICE_NAME         "AMB82 Motion Camera"
 
 // ============================================================
-// WiFi Configuration
+// WiFi Configuration (SSID/password in secrets.h)
 // ============================================================
-#define WIFI_SSID           "xxxx956"
-#define WIFI_PASSWORD       "1RootPass0"
+#define WIFI_BOOT_TIMEOUT_MS      8000   // shorter: proceed to loop after 8s
 #define WIFI_CONNECT_TIMEOUT_MS   15000
 #define WIFI_RECONNECT_INTERVAL_MS 10000
 
 // ============================================================
-// MQTT Configuration
+// MQTT Configuration (broker/user/password in secrets.h)
 // ============================================================
-#define MQTT_BROKER         "192.168.2.143"
-#define MQTT_USER           "amb82_cam_01"
-#define MQTT_PASSWORD       "DcU9EOHGPWxSH2T6"
 
 // MQTT Security: set to 1 for TLS + mTLS on port 8883, 0 for plain on 1883
 #define MQTT_USE_TLS        1
@@ -55,6 +55,7 @@
 #define MQTT_TOPIC_CONFIG   "camera/" DEVICE_ID "/config"
 
 #define MQTT_RECONNECT_INTERVAL_MS 5000
+#define MQTT_MOTION_RECONNECT_INTERVAL_MS 2000  // motion-event forced reconnect rate limit
 #define MQTT_STATUS_INTERVAL_MS    3600000 // 1 hour
 
 // ============================================================
@@ -95,19 +96,23 @@
 #define RTSP_BITRATE        (2 * 1024 * 1024)  // 2 Mbps recommended for WiFi
 
 // ============================================================
-// Recording Indicator LED
+// Indicator LEDs
 // ============================================================
-// Use LED_G (on-board green LED on AMB82 Mini, Arduino pin 24 = PE_6).
-// Passing PE_6 directly does not work — pinMode/digitalWrite expect the
-// Arduino pin index from the variant table, not the raw mbed pin enum.
+// Green LED (LED_G, Arduino pin 24 = PE_6): motion/record state.
+// Blue LED  (LED_BUILTIN, PF_9): system health (WiFi/NTP/MQTT).
+// Passing the raw mbed pin enum (PE_6, PF_9) does not work -- pinMode /
+// digitalWrite want the Arduino pin index from the variant table.
 #define REC_LED_PIN         LED_G
+#define STATUS_LED_PIN      LED_BUILTIN
 
 // ============================================================
 // NTP
 // ============================================================
 #define NTP_SERVER           "pool.ntp.org"
-#define NTP_TIMEZONE_OFFSET  0      // Offset in seconds from UTC (e.g., 3600 for UTC+1)
-#define NTP_UPDATE_INTERVAL  3600000 // Sync every hour (ms)
+// Timezone is server-authoritative at runtime via MQTT config message.
+// Until the broker delivers one, epochs/timestamps are in UTC.
+#define NTP_UPDATE_INTERVAL  3600000  // Sync every hour (ms)
+#define NTP_VALID_EPOCH_MIN  1704067200UL  // 2024-01-01T00:00:00Z -- sanity floor
 
 // ============================================================
 // Power Management
@@ -134,7 +139,7 @@
 // ============================================================
 #ifdef BUILD_RELEASE
   #define WDT_ENABLED        1
-  #define WDT_TIMEOUT_MS     30000    // 30s — reboot if loop hangs
+  #define WDT_TIMEOUT_MS     30000    // 30s -- reboot if loop hangs
 #else
   #define WDT_ENABLED        0
 #endif
@@ -145,7 +150,7 @@
 #define SERIAL_BAUD          115200
 
 #ifdef BUILD_RELEASE
-  // Release: no serial output at all — UART peripheral stays off
+  // Release: no serial output at all -- UART peripheral stays off
   #define LOG(msg)           ((void)0)
   #define LOGF(fmt, ...)     ((void)0)
 #else

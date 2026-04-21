@@ -13,17 +13,21 @@
 
 class MqttManager {
 public:
-    // Accepts Client& — works with both WiFiClient and WiFiSSLClient
+    // Accepts Client& -- works with both WiFiClient and WiFiSSLClient
     void begin(Client& netClient, NTPClient& timeClient);
     bool ensureConnected();
-    void loop();  // Call in main loop for keepalive
+    // Cheap state check for the blue status LED. Wraps PubSubClient::connected().
+    bool connected();
 
     void publishStatus(int batteryPct, float batteryV, int rssi);
-    void publishMotionEvent(bool motionActive, const char* rtspUrl);
+    // Returns true iff the publish was accepted by the TCP stack. On false,
+    // caller should hold off on any state transition that depends on the
+    // recorder actually knowing about the event.
+    bool publishMotionEvent(bool motionActive, const char* rtspUrl);
     void publishBatteryAlert(const char* level, int percentage, float voltage);
 
     unsigned long getEpochTime();
-    void checkConfig();  // Call from main loop during idle — polls for config updates
+    void checkConfig();  // Call from main loop during idle -- polls for config updates
 
 private:
     bool connect();

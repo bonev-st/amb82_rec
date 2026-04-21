@@ -10,10 +10,22 @@ MqttManager* MqttManager::_instance = nullptr;
 // overload of connect() leaves _sni_hostname NULL, which makes mbedTLS skip
 // hostname matching entirely (chain-of-trust verification still happens).
 #if MQTT_USE_TLS
-// Ameba's IPAddress has no fromString() — parse "a.b.c.d" manually.
+// Ameba's IPAddress has no fromString() -- parse "a.b.c.d" manually.
+// MQTT_USE_TLS requires an IPv4 literal because mbedTLS 2.28 on this
+// platform checks DNS SAN strings, not IP SAN; passing a hostname as SNI
+// always fails -0x2700 (see begin()). If someone sets MQTT_BROKER to a
+// hostname, sscanf returns 0 and the silent 0.0.0.0 fallback would hide
+// the error -- so check and log loudly.
 static IPAddress mqttBrokerIP() {
     unsigned int a = 0, b = 0, c = 0, d = 0;
-    sscanf(MQTT_BROKER, "%u.%u.%u.%u", &a, &b, &c, &d);
+    int n = sscanf(MQTT_BROKER, "%u.%u.%u.%u", &a, &b, &c, &d);
+    if (n != 4 || a > 255 || b > 255 || c > 255 || d > 255) {
+        LOGF("[MQTT] FATAL: MQTT_BROKER='%s' is not an IPv4 literal. TLS path "
+             "requires a.b.c.d because hostname SNI is not supported on this "
+             "mbedTLS build. Set MQTT_BROKER in secrets.h to an IP and reflash.\n",
+             MQTT_BROKER);
+        return IPAddress(0, 0, 0, 0);
+    }
     return IPAddress((uint8_t)a, (uint8_t)b, (uint8_t)c, (uint8_t)d);
 }
 #endif
@@ -28,14 +40,14 @@ void MqttManager::begin(Client& netClient, NTPClient& timeClient) {
 #else
     _client.setServer(MQTT_BROKER, MQTT_PORT);
 #endif
-    // No setCallback on main client — calling loop() on Ameba's WiFiClient
+    // No setCallback on main client -- calling loop() on Ameba's WiFiClient
     // blocks indefinitely and corrupts the connection for subsequent publishes.
-    // keepAlive=0 → per MQTT 3.1.1 [MQTT-3.1.2-25], broker must not drop the
+    // keepAlive=0 -> per MQTT 3.1.1 [MQTT-3.1.2-25], broker must not drop the
     // client for keepalive timeout. publishMotionEvent() force-reconnects on
     // demand if TCP breaks.
     _client.setKeepAlive(0);
 
-    // Pull config BEFORE connecting the main client — uses a separate,
+    // Pull config BEFORE connecting the main client -- uses a separate,
     // disposable WiFiClient + PubSubClient so the main client stays pristine.
     unsigned long t0 = millis();
     pullConfig();
@@ -70,7 +82,7 @@ void MqttManager::pullConfig() {
     // Read the retained config message using a SEPARATE, disposable MQTT
     // connection.  Calling subscribe()/loop() on the main PubSubClient
     // corrupts the Ameba WiFiClient state and breaks subsequent publishes.
-    // A throwaway client avoids that entirely — it connects, grabs the
+    // A throwaway client avoids that entirely -- it connects, grabs the
     // retained message, disconnects, and goes out of scope.
 #if MQTT_USE_TLS
     WiFiSSLClient cfgWifi;
@@ -108,7 +120,7 @@ void MqttManager::pullConfig() {
 }
 
 void MqttManager::checkConfig() {
-    // Periodic config poll — call from main loop during STATE_IDLE only.
+    // Periodic config poll -- call from main loop during STATE_IDLE only.
     // Creates a disposable MQTT connection to read the retained config
     // message, so runtime timezone changes via MQTT take effect within
     // one polling interval without needing a reboot.
@@ -147,6 +159,11 @@ void MqttManager::mqttCallback(char* topic, uint8_t* payload, unsigned int lengt
         LOGF("[MQTT] Config: failed to parse timezone_offset value\n");
         return;
     }
+    // Clamp to valid timezone range +-12h to reject garbage/overflow values.
+    if (offset < -43200 || offset > 43200) {
+        LOGF("[MQTT] Config: timezone_offset %ld out of range, ignoring\n", offset);
+        return;
+    }
 
     _instance->_timeClient->setTimeOffset((int)offset);
     LOGF("[MQTT] Config: timezone_offset=%ld (UTC%+.1fh)\n", offset, offset / 3600.0f);
@@ -155,9 +172,8 @@ void MqttManager::mqttCallback(char* topic, uint8_t* payload, unsigned int lengt
 unsigned long MqttManager::getEpochTime() {
     if (!_timeClient) return millis() / 1000;
     unsigned long epoch = _timeClient->getEpochTime();
-    // Sanity check: if NTP hasn't synced yet, epoch will be near zero.
-    // 1704067200 = 2024-01-01T00:00:00Z
-    if (epoch < 1704067200UL) return millis() / 1000;
+    // If NTP hasn't synced yet, fall back to uptime seconds.
+    if (epoch < NTP_VALID_EPOCH_MIN) return millis() / 1000;
     return epoch;
 }
 
@@ -174,10 +190,8 @@ bool MqttManager::ensureConnected() {
     return connect();
 }
 
-void MqttManager::loop() {
-    if (_client.connected()) {
-        _client.loop();
-    }
+bool MqttManager::connected() {
+    return _client.connected();
 }
 
 void MqttManager::publishStatus(int batteryPct, float batteryV, int rssi) {
@@ -198,16 +212,22 @@ void MqttManager::publishStatus(int batteryPct, float batteryV, int rssi) {
     LOGF("[MQTT] Status: %s\n", payload);
 }
 
-void MqttManager::publishMotionEvent(bool motionActive, const char* rtspUrl) {
-    // Motion events must not be dropped. If the connection is down, force an
-    // immediate reconnect attempt (bypassing the backoff gate in
-    // ensureConnected) so the recorder never misses a start/stop.
+bool MqttManager::publishMotionEvent(bool motionActive, const char* rtspUrl) {
+    // Motion events are important but not worth flooding the radio with.
+    // If disconnected, attempt a reconnect -- but gate at 2 s so a broker-
+    // down condition during streaming (100 ms loop cadence) doesn't spin
+    // on blocking reconnects and starve the motion state machine.
     if (!_client.connected()) {
-        LOG("[MQTT] motion publish: not connected, forcing reconnect...");
-        _lastReconnectAttempt = millis();
+        unsigned long now = millis();
+        if (now - _lastReconnectAttempt < MQTT_MOTION_RECONNECT_INTERVAL_MS) {
+            LOG("[MQTT] motion publish: reconnect gate closed -- event dropped");
+            return false;
+        }
+        _lastReconnectAttempt = now;
+        LOG("[MQTT] motion publish: not connected, reconnecting...");
         if (!connect()) {
-            LOG("[MQTT] motion publish: reconnect failed — event lost");
-            return;
+            LOG("[MQTT] motion publish: reconnect failed -- event lost");
+            return false;
         }
     }
 
@@ -222,16 +242,23 @@ void MqttManager::publishMotionEvent(bool motionActive, const char* rtspUrl) {
             DEVICE_ID, getEpochTime());
     }
 
-    _client.publish(MQTT_TOPIC_MOTION, payload);
-    LOGF("[MQTT] Motion: %s\n", motionActive ? "STARTED" : "STOPPED");
+    bool ok = _client.publish(MQTT_TOPIC_MOTION, payload);
+    LOGF("[MQTT] Motion: %s (publish=%s)\n",
+         motionActive ? "STARTED" : "STOPPED", ok ? "ok" : "FAIL");
+    return ok;
 }
 
 void MqttManager::publishBatteryAlert(const char* level, int percentage, float voltage) {
     if (!_client.connected()) {
-        LOG("[MQTT] battery alert: not connected, forcing reconnect...");
-        _lastReconnectAttempt = millis();
+        unsigned long now = millis();
+        if (now - _lastReconnectAttempt < MQTT_MOTION_RECONNECT_INTERVAL_MS) {
+            LOG("[MQTT] battery alert: reconnect gate closed -- alert dropped");
+            return;
+        }
+        _lastReconnectAttempt = now;
+        LOG("[MQTT] battery alert: not connected, reconnecting...");
         if (!connect()) {
-            LOG("[MQTT] battery alert: reconnect failed — alert lost");
+            LOG("[MQTT] battery alert: reconnect failed -- alert lost");
             return;
         }
     }

@@ -67,9 +67,9 @@ void setup() {
     printf("[TEST] forceUpdate(): %s\n", forced ? "true" : "false");
     reportTest("forceUpdate() returns true", forced);
 
-    // Test 3: Update (returns false when interval not elapsed — expected after forceUpdate)
+    // Test 3: Update (returns false when interval not elapsed -- expected after forceUpdate)
     bool updated = timeClient.update();
-    printf("[TEST] timeClient.update(): %s (false is OK — interval not elapsed)\n", updated ? "true" : "false");
+    printf("[TEST] timeClient.update(): %s (false is OK -- interval not elapsed)\n", updated ? "true" : "false");
     reportTest("timeClient.update() runs without error", true);
 
     // Test 4: Epoch time

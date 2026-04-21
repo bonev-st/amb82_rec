@@ -1,16 +1,18 @@
 #include "wifi_manager.h"
 
-void WifiManager::begin() {
+bool WifiManager::begin() {
     LOG("[WiFi] Connecting...");
-    connect();
+    // Boot path uses the shorter timeout so a dead AP doesn't gate the rest
+    // of setup() for 15 s. Caller retries/resets on failure.
+    return connect(WIFI_BOOT_TIMEOUT_MS);
 }
 
-bool WifiManager::connect() {
+bool WifiManager::connect(unsigned long timeoutMs) {
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
     unsigned long start = millis();
     while (WiFi.status() != WL_CONNECTED) {
-        if (millis() - start > WIFI_CONNECT_TIMEOUT_MS) {
+        if (millis() - start > timeoutMs) {
             LOG("[WiFi] Connection timeout");
             return false;
         }
@@ -23,7 +25,7 @@ bool WifiManager::connect() {
 }
 
 // Non-blocking reconnect state machine. Each call returns in microseconds
-// regardless of link state — a single WiFi.status() check, never a blocking
+// regardless of link state -- a single WiFi.status() check, never a blocking
 // wait loop. Used from the main loop so motion detection is not delayed
 // when the AP goes away. The blocking `connect()` path is retained for
 // boot-time use via begin().
@@ -48,7 +50,7 @@ bool WifiManager::ensureConnected() {
         return false;
     }
 
-    // Attempt already in progress — single non-blocking poll per call.
+    // Attempt already in progress -- single non-blocking poll per call.
     if (WiFi.status() == WL_CONNECTED) {
         LOGF("[WiFi] Connected, IP: %s, RSSI: %ld dBm\n",
              WiFi.localIP().get_address(), WiFi.RSSI());
@@ -63,9 +65,8 @@ bool WifiManager::ensureConnected() {
 }
 
 int WifiManager::getRSSI() {
+    // RSSI is only meaningful when associated. Return 0 when disconnected so
+    // status JSON doesn't surface garbage/SDK-sentinel values.
+    if (WiFi.status() != WL_CONNECTED) return 0;
     return WiFi.RSSI();
-}
-
-bool WifiManager::isConnected() {
-    return WiFi.status() == WL_CONNECTED;
 }

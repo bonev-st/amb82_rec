@@ -13,7 +13,7 @@ public:
     bool isLow();
     bool isCritical();
 
-    // Returns true only on the transition from normal→low or low→critical
+    // Returns true on any transition between normal/low/critical states.
     bool hasNewAlert();
     const char* getAlertLevel();
 

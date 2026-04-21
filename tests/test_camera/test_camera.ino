@@ -37,12 +37,12 @@ void setup() {
     printf(" Test 6: Video Pipeline Init (RTSP Arch)\n");
     printf("========================================\n\n");
 
-    // Test 1: VideoSetting — RTSP channel (FHD H264)
+    // Test 1: VideoSetting -- RTSP channel (FHD H264)
     printf("[TEST] configStream: %dx%d @ %d fps (H264)\n",
            configStream.width(), configStream.height(), configStream.fps());
     reportTest("VideoSetting RTSP (FHD H264)", configStream.width() == 1920);
 
-    // Test 2: VideoSetting — detection channel (VGA RGB)
+    // Test 2: VideoSetting -- detection channel (VGA RGB)
     printf("[TEST] configMD: %dx%d @ %d fps (RGB)\n",
            configMD.width(), configMD.height(), configMD.fps());
     reportTest("VideoSetting detect (VGA RGB)", configMD.width() == 640);
