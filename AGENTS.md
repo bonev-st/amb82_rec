@@ -1,48 +1,39 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## Project Overview
 
-Motion-triggered video recorder for the **Ameba AMB82 Mini** camera board. The camera runs an RTSP stream (Ch0 H264 FHD) continuously; on-board motion detection (Ch3 RGB) publishes an MQTT event with the RTSP URL so a Linux server pulls and records the clip with FFmpeg. No local SD card storage.
+Motion-triggered RTSP streamer for the **Ameba AMB82 Mini** camera board. The firmware detects motion via the on-board camera pipeline, starts an RTSP stream on demand, and notifies a Linux server via MQTT to begin FFmpeg recording. No local SD card storage.
 
 ## Target Platform
 
 - **Board:** Ameba AMB82 Mini (Realtek RTL8735B, ARM Cortex-M33)
 - **Toolchain:** Arduino IDE with Ameba Arduino SDK
 - **Language:** C/C++ (Arduino `.ino` + helper modules)
-- **Power source:** Battery -- power optimization is a first-class concern
+- **Power source:** Battery — power optimization is a first-class concern
 
 ## Architecture
 
 ### Firmware (this repo)
-
-- Motion detection via Channel 3 (VGA, RGB, 10fps) -- always on, low power
-- RTSP streaming via Channel 0 (FHD, H264, 30fps) -- always on (dynamic
-  start/stop produced stuck static frames in testing)
+- Motion detection via Channel 3 (VGA, RGB, 10fps) — always on, low power
+- RTSP streaming via Channel 0 (FHD, H264, 30fps) — started/stopped on motion
 - MQTT for signaling (motion start/stop with RTSP URL, status, battery alerts)
 - Wi-Fi reconnect for reliability
 
 ### Server Stack (`server/` directory)
-
-- **Mosquitto** -- MQTT broker for event signaling
-- **recorder.py** -- Python script: subscribes to MQTT, spawns FFmpeg to record RTSP
-- **Home Assistant** -- automation, dashboards, notifications
+- **Mosquitto** — MQTT broker for event signaling
+- **recorder.py** — Python script: subscribes to MQTT, spawns FFmpeg to record RTSP
+- **Home Assistant** — automation, dashboards, notifications
 
 ## Key Design Decisions
 
-- **Motion is the MQTT trigger, not the RTSP trigger.** Ch0 H264 + RTSP
-  server run continuously because dynamic re-start produced stuck/static
-  frames. The server pulls the already-live RTSP stream only when a
-  motion event tells it to. This is a battery tradeoff -- the encoder
-  is always on -- but the alternative did not work reliably.
-- No local SD card storage -- server records clips via FFmpeg.
-- MQTT carries motion events with RTSP URL so server knows when and
-  where to pull.
-- Low-battery alerts fire on state transitions (both worsening and
-  recovery) with retain=true, so the server's retained state tracks the
-  current battery bucket.
-- Supports both battery and USB-powered operation.
+- **Motion-triggered RTSP**, not continuous streaming (battery-friendly)
+- No local SD card storage — server records clips via FFmpeg
+- Camera detects motion locally (Ch3 RGB), starts RTSP (Ch0 H264) on demand
+- MQTT carries motion events with RTSP URL so server knows when/where to record
+- Low-battery alerts fire on threshold crossing only (no spam)
+- Supports both battery and USB-powered operation
 
 ## Build & Flash
 
@@ -58,7 +49,7 @@ Motion-triggered video recorder for the **Ameba AMB82 Mini** camera board. The c
 - Compile-time configuration constants (Wi-Fi credentials, MQTT settings, thresholds, etc.) with clearly marked placeholders
 - Descriptive names; comments only where non-obvious
 - Reuse official Ameba Arduino SDK examples and APIs wherever possible
-- No unnecessary abstractions -- keep it practical for Arduino IDE
+- No unnecessary abstractions — keep it practical for Arduino IDE
 
 ## AMB82 Mini SDK API Reference
 
@@ -68,8 +59,8 @@ SDK path: `C:\Users\bonev\AppData\Local\Arduino15\packages\realtek\hardware\Ameb
 
 **Header:** `libraries/Multimedia/src/VideoStream.h`
 
-- `extern Video Camera;` -- global camera instance (class is `Video`, NOT `Camera` as type name)
-- Do NOT declare `Camera cam;` -- use `Camera` directly
+- `extern Video Camera;` — global camera instance (class is `Video`, NOT `Camera` as type name)
+- Do NOT declare `Camera cam;` — use `Camera` directly
 
 ```cpp
 // VideoSetting constructors
@@ -87,7 +78,6 @@ MMFModule getStream(int ch = 0);
 ```
 
 **Constants:**
-
 ```
 VIDEO_H264=1, VIDEO_HEVC=0, VIDEO_JPEG=2, VIDEO_RGB=4, VIDEO_NV12=3
 VIDEO_FHD=6 (1920x1080), VIDEO_HD=5 (1280x720), VIDEO_VGA=3 (640x480)
@@ -95,7 +85,7 @@ V1_CHANNEL=0, V2_CHANNEL=1, V3_CHANNEL=2
 CAM_FPS=30
 ```
 
-**Important:** Motion detection requires **Channel 3 with VIDEO_RGB** format. Do not use H264 for motion detection. Channel 3 uses index `3` (not `V3_CHANNEL` which is `2`). You must also configure Channel 0 (H264) for sensor initialization -- see Motion Detection section for details.
+**Important:** Motion detection requires **Channel 3 with VIDEO_RGB** format. Do not use H264 for motion detection. Channel 3 uses index `3` (not `V3_CHANNEL` which is `2`). You must also configure Channel 0 (H264) for sensor initialization — see Motion Detection section for details.
 
 ### RTSP Streaming
 
@@ -112,8 +102,8 @@ void printInfo(void);
 void printInfo(char* ip);  // Prints rtsp://<ip>:<port>
 ```
 
-RTSP extends `MMFModule` -- use with StreamIO like any other output.
-`begin()`/`end()` map to `RTSPSetStreaming(ctx, 1/0)` -- safe to call repeatedly.
+RTSP extends `MMFModule` — use with StreamIO like any other output.
+`begin()`/`end()` map to `RTSPSetStreaming(ctx, 1/0)` — safe to call repeatedly.
 
 ### Audio (optional, for RTSP with audio)
 
@@ -139,7 +129,7 @@ AAC aac;
 aac.configAudio(configA);
 aac.begin();
 
-// RTSP with audio: use StreamIO(2, 1) for video+audio -> RTSP
+// RTSP with audio: use StreamIO(2, 1) for video+audio → RTSP
 rtsp.configVideo(configV);
 rtsp.configAudio(configA, CODEC_AAC);
 ```
@@ -163,14 +153,14 @@ MotionDetectionResult getResult(uint16_t index);
 std::vector<MotionDetectionResult> getResult(void);  // returns MotionDetectionResult, NOT vector<float>
 ```
 
-**MotionDetectionResult** -- has `xMin()`, `xMax()`, `yMin()`, `yMax()` (all return float)
+**MotionDetectionResult** — has `xMin()`, `xMax()`, `yMin()`, `yMax()` (all return float)
 
 **Important gotchas:**
 - Motion detection uses **Channel 3** (not V3_CHANNEL=2). Channel 3 is a special NN/MD channel with index 3.
-- Channel 3 (RGB) alone cannot initialize the camera sensor. **You must also configure Channel 0** (H264) via `Camera.configVideoChannel(0, configV)` before `Camera.videoInit()`. Channel 0 does NOT need to be started (`channelBegin`) -- just configured. Starting it without a consumer causes `CH 0 MMF ENC Queue full` warnings.
-- **Do NOT call `setTriggerBlockCount()` before `begin()`** -- it enables `CMD_EIP_SET_MD_OUTPUT` which changes the MD module's internal output mode and causes stale/stuck results.
+- Channel 3 (RGB) alone cannot initialize the camera sensor. **You must also configure Channel 0** (H264) via `Camera.configVideoChannel(0, configV)` before `Camera.videoInit()`. Channel 0 does NOT need to be started (`channelBegin`) — just configured. Starting it without a consumer causes `CH 0 MMF ENC Queue full` warnings.
+- **Do NOT call `setTriggerBlockCount()` before `begin()`** — it enables `CMD_EIP_SET_MD_OUTPUT` which changes the MD module's internal output mode and causes stale/stuck results.
 - Use **`getResultCount()`** to check for motion, not `getResult().size()`. This matches the SDK examples.
-- Allow **5-8 seconds warm-up** after `channelBegin()` for auto-exposure (AE) to stabilize and the MD background model to build. Without this, you get constant false detections.
+- Allow **5–8 seconds warm-up** after `channelBegin()` for auto-exposure (AE) to stabilize and the MD background model to build. Without this, you get constant false detections.
 
 ### MP4Recording
 
@@ -250,10 +240,9 @@ char* SSID();
 ```
 
 **IPAddress** (`cores/ambpro2/IPAddress.h`):
-- Use `get_address()` to get string -- NO `toString()` method
+- Use `get_address()` to get string — NO `toString()` method
 
 **WiFiClient** (`libraries/WiFi/src/WiFiClient.h`):
-
 ```cpp
 int connect(const char *host, uint16_t port);
 size_t write(const uint8_t *buf, size_t size);
@@ -265,13 +254,12 @@ uint8_t connected(void);
 ```
 
 **WiFiSSLClient** (`libraries/WiFi/src/WiFiSSLClient.h`):
-
 ```cpp
-// Extends Client -- drop-in replacement for WiFiClient with TLS
+// Extends Client — drop-in replacement for WiFiClient with TLS
 WiFiSSLClient();
 // All WiFiClient methods (connect, write, read, available, connected, stop)
-void setRootCA(unsigned char *rootCA);                    // PEM string -- verify server cert
-void setClientCertificate(unsigned char *cert, unsigned char *key);  // PEM strings -- mTLS
+void setRootCA(unsigned char *rootCA);                    // PEM string — verify server cert
+void setClientCertificate(unsigned char *cert, unsigned char *key);  // PEM strings — mTLS
 void setPreSharedKey(unsigned char *pskIdent, unsigned char *psKey); // PSK auth (hex string)
 int setRecvTimeout(int timeout);
 ```
@@ -279,7 +267,7 @@ int setRecvTimeout(int timeout);
 **Important:**
 - Uses mbedTLS internally
 - Compatible with PubSubClient (`setClient(Client&)` accepts WiFiSSLClient)
-- SDK bug: `WDT()` default constructor -- see WDT section
+- SDK bug: `WDT()` default constructor — see WDT section
 - Cert strings must be null-terminated PEM with `\n` line endings
 - SDK example: `libraries/MQTTClient/examples/MQTT_TLS/MQTT_TLS.ino`
 
@@ -325,10 +313,10 @@ int getMonthDay() const;
 **Header:** `cores/ambpro2/LOGUARTClass.h`
 
 - `extern LOGUARTClass Serial;`
-- `Serial.print()` / `Serial.println()` -- standard Print methods
-- **NO `Serial.printf()`** -- `LOGUARTClass` does not have `printf`
-- Global `printf()` is available -- mapped to `dbg_printf()` via macro in `cores/ambpro2/Arduino.h`
-- Global `sprintf()` is available -- mapped to `dbg_sprintf()`
+- `Serial.print()` / `Serial.println()` — standard Print methods
+- **NO `Serial.printf()`** — `LOGUARTClass` does not have `printf`
+- Global `printf()` is available — mapped to `dbg_printf()` via macro in `cores/ambpro2/Arduino.h`
+- Global `sprintf()` is available — mapped to `dbg_sprintf()`
 
 ### ADC / Analog
 
@@ -348,10 +336,10 @@ void analogReadResolution(int res);  // default 10-bit (0-1023)
 **Header:** `libraries/Watchdog/src/WDT.h`
 
 ```cpp
-// WDT wdt;                          // DO NOT USE -- declared in header but not defined in .cpp (linker error)
-WDT wdt(0);                          // Use this -- 0 = normal WDT, 1 = Always-On WDT
+// WDT wdt;                          // DO NOT USE — declared in header but not defined in .cpp (linker error)
+WDT wdt(0);                          // Use this — 0 = normal WDT, 1 = Always-On WDT
 
-void init(uint32_t timeout_ms);      // Init with timeout (1000-65535 ms)
+void init(uint32_t timeout_ms);      // Init with timeout (1000–65535 ms)
 void start(void);                    // Start watchdog counter
 void stop(void);                     // Stop watchdog counter
 void refresh(void);                  // Reset timer (call in loop to prevent reboot)
@@ -359,7 +347,6 @@ void init_irq(wdt_irq_handler handler, uint32_t id);  // Optional: interrupt ins
 ```
 
 **Usage pattern (release builds only):**
-
 ```cpp
 #if WDT_ENABLED
   WDT wdt;
@@ -370,7 +357,7 @@ void init_irq(wdt_irq_handler handler, uint32_t id);  // Optional: interrupt ins
 #endif
 ```
 
-**Note:** The SDK's `Arduino.h` defines `WDT_TIMEOUT_MS` (default 10000), `WDT_PERIOD_MS` (default 200), and `LOOP_TIMEOUT_MS` (default 1500) -- these are for the SDK's internal health check, not our watchdog. Our `config.h` defines its own `WDT_TIMEOUT_MS` which shadows the SDK default when `WDT_ENABLED` is set.
+**Note:** The SDK's `Arduino.h` defines `WDT_TIMEOUT_MS` (default 10000), `WDT_PERIOD_MS` (default 200), and `LOOP_TIMEOUT_MS` (default 1500) — these are for the SDK's internal health check, not our watchdog. Our `config.h` defines its own `WDT_TIMEOUT_MS` which shadows the SDK default when `WDT_ENABLED` is set.
 
 ### Build Modes (DEBUG / RELEASE)
 
@@ -390,7 +377,7 @@ The firmware has two build modes controlled in `config.h`:
 - Config poll: 1min (debug) vs 5min (release)
 - WDT: disabled (debug) vs enabled at 30s (release)
 
-**Important:** When adding new debug output, always use `LOG()` or `LOGF()` --
+**Important:** When adding new debug output, always use `LOG()` or `LOGF()` —
 never raw `Serial.print()` or `printf()`. This ensures release builds stay silent.
 
 ### MQTT Security (TLS / mTLS)
@@ -414,18 +401,14 @@ Controlled by `MQTT_USE_TLS` in `config.h`:
 **`mqtt_certs.h`** contains three PEM strings: `mqtt_ca_cert`, `mqtt_client_cert`, `mqtt_client_key`. Regenerate certs on the broker, copy PEM content into this file, recompile.
 
 ### Linux Server (for tests)
-
 ## Access to remote Linux test machine
-
 System: Debian 13 (aarch64)
 Use the SSH alias configured locally on the developer machine:
 
 ```bash
 ssh test-system
 ```
-
 #### MQTT Broker (Mosquitto)
-
 Installed and running on the Debian host for `tests/test_mqtt/test_mqtt.ino` and
 any other firmware test that needs a broker.
 
@@ -433,18 +416,15 @@ any other firmware test that needs a broker.
 - Package: `mosquitto` + `mosquitto-clients` (v2.0.21)
 - Listener: `0.0.0.0:1883`, anonymous allowed (LAN-only test setup)
 - LAN-exposing config: `/etc/mosquitto/conf.d/local.conf`
-
   ```
   listener 1883 0.0.0.0
   allow_anonymous true
   ```
-
 - Main config: `/etc/mosquitto/mosquitto.conf` (distro defaults, includes `conf.d/`)
 - Firewall: none active (no ufw, no iptables rules)
 
 **Point firmware tests at it:** set `MQTT_BROKER "sbbu01.local"` and leave
 `MQTT_USER`/`MQTT_PASS` empty. Example (`tests/test_mqtt/test_mqtt.ino`):
-
 ```c
 #define MQTT_BROKER "sbbu01.local"
 #define MQTT_PORT   1883
@@ -453,7 +433,6 @@ any other firmware test that needs a broker.
 ```
 
 **Watch traffic from the host** (useful for verifying firmware publishes):
-
 ```bash
 ssh test-system "mosquitto_sub -h 127.0.0.1 -t '#' -v"
 # Or filter to the test topics:
@@ -461,13 +440,11 @@ ssh test-system "mosquitto_sub -h 127.0.0.1 -t 'amb82_test/#' -v"
 ```
 
 **Inject test messages from the host:**
-
 ```bash
 ssh test-system "mosquitto_pub -h 127.0.0.1 -t amb82_test/cmd -m hello"
 ```
 
 **Service ops:**
-
 ```bash
 sudo systemctl {status,restart,stop,start} mosquitto
 sudo journalctl -u mosquitto -f
@@ -478,7 +455,6 @@ recorder pipeline (`server/` stack), switch to a `password_file` and set
 `allow_anonymous false`.
 
 #### Recorder (recorder.py)
-
 Runs on the Debian host as a user-level systemd service.
 
 - Service: `amb82-recorder.service` (user service under `arduino` user)
@@ -487,7 +463,6 @@ Runs on the Debian host as a user-level systemd service.
 - Clips path: `/home/arduino/amb82_clips/`
 
 **Service ops:**
-
 ```bash
 systemctl --user status amb82-recorder
 systemctl --user restart amb82-recorder
