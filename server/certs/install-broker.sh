@@ -9,8 +9,8 @@
 # Must be run on the broker host. Requires sudo (will prompt).
 #
 # The resulting broker config has TWO listeners:
-#   1883 — anonymous (backward-compatible plain listener)
-#   8883 — TLS + mTLS + password auth
+#   1883 -- anonymous (backward-compatible plain listener)
+#   8883 -- TLS + mTLS + password auth
 #
 # Usage:
 #   ./install-broker.sh
@@ -22,7 +22,7 @@
 # ============================================================
 set -euo pipefail
 
-# Resolve source dir from the script's own location — NOT $HOME — because
+# Resolve source dir from the script's own location -- NOT $HOME -- because
 # sudo rewrites $HOME to /root and ~ then points to the wrong place.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SRC_DIR="${1:-$SCRIPT_DIR/out}"
@@ -47,13 +47,15 @@ echo "==> Writing /etc/mosquitto/conf.d/secure.conf ..."
 sudo tee /etc/mosquitto/conf.d/secure.conf >/dev/null <<'EOF'
 # ============================================================
 # Dual-listener config:
-#   :1883 — plain, anonymous (backward compat)
-#   :8883 — TLS + mTLS + password auth
+#   :1883 -- plain, anonymous (backward compat)
+#   :8883 -- TLS + mTLS + password auth
 # ============================================================
 per_listener_settings true
 
-# Plain listener
-listener 1883 0.0.0.0
+# Plain listener -- bound to localhost only. Do NOT expose anonymous MQTT
+# to the LAN; any client would be able to subscribe to camera topics
+# (RTSP URLs, battery, motion) and publish fake motion events.
+listener 1883 127.0.0.1
 allow_anonymous true
 
 # TLS listener

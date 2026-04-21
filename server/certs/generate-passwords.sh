@@ -4,7 +4,7 @@
 #
 # Generates a Mosquitto password file with two accounts (camera + recorder)
 # using randomly-generated passwords. Prints the plaintext passwords once
-# — save them, they cannot be recovered from the hashed password file.
+# -- save them, they cannot be recovered from the hashed password file.
 #
 # Requires: mosquitto_passwd (from the `mosquitto-clients` package on
 # Debian/Ubuntu, `mosquitto` on macOS/Homebrew).
@@ -14,7 +14,7 @@
 #   ./generate-passwords.sh /path/to/output-dir
 #
 # Output:
-#   passwd  — Mosquitto password file (deploy to /etc/mosquitto/certs/)
+#   passwd  -- Mosquitto password file (deploy to /etc/mosquitto/certs/)
 # ============================================================
 set -euo pipefail
 
@@ -41,10 +41,10 @@ chmod 600 "$PASSWD_FILE"
 
 echo
 echo "=================================================================="
-echo "  SAVE THESE PASSWORDS — they are NOT recoverable from the file."
+echo "  SAVE THESE PASSWORDS -- they are NOT recoverable from the file."
 echo "=================================================================="
-echo "  amb82_cam_01  →  $CAM_PASS   (set MQTT_PASSWORD in firmware)"
-echo "  recorder      →  $REC_PASS   (set MQTT_PASS in recorder env)"
+echo "  amb82_cam_01  ->  $CAM_PASS   (set MQTT_PASSWORD in firmware)"
+echo "  recorder      ->  $REC_PASS   (set MQTT_PASS in recorder env)"
 echo "=================================================================="
 echo
 echo "Wrote: $PASSWD_FILE"

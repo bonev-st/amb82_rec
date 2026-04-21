@@ -6,8 +6,8 @@
 # sign the server and client certificates for the MQTT broker.
 #
 # Output files (in $OUT_DIR, default ./out):
-#   ca.key  — CA private key (KEEP SECRET, never ship it)
-#   ca.crt  — CA public certificate (safe to distribute, embedded in firmware)
+#   ca.key  -- CA private key (KEEP SECRET, never ship it)
+#   ca.crt  -- CA public certificate (safe to distribute, embedded in firmware)
 #
 # Usage:
 #   ./generate-ca.sh
@@ -51,5 +51,5 @@ echo "==> Done. Summary:"
 openssl x509 -in "$OUT_DIR/ca.crt" -noout -subject -ext basicConstraints -ext keyUsage
 echo
 echo "Files:"
-echo "  $OUT_DIR/ca.key  (SECRET — do not share)"
+echo "  $OUT_DIR/ca.key  (SECRET -- do not share)"
 echo "  $OUT_DIR/ca.crt  (public; embed in firmware and install on broker)"

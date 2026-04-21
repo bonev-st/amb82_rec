@@ -18,7 +18,7 @@ section first.
 | `generate-server.sh`       | Create the broker's server certificate, signed by the CA |
 | `generate-client.sh`       | Create a client certificate (one per device/service) |
 | `generate-passwords.sh`    | Create a Mosquitto password file with random passwords |
-| `generate-all.sh`          | Run all of the above in sequence — the usual entry point |
+| `generate-all.sh`          | Run all of the above in sequence -- the usual entry point |
 | `install-broker.sh`        | Deploy certs + config to `/etc/mosquitto/` (needs sudo) |
 | `config/ca.cnf`            | OpenSSL config for the CA (ensures `CA:TRUE`) |
 | `config/server.cnf`        | OpenSSL config for the server SANs (hostnames + IPs) |
@@ -37,7 +37,7 @@ cd server/certs
 
 This creates an `out/` directory containing the CA, server cert, two client
 certs (camera + recorder), and a Mosquitto password file. **The script
-prints the two passwords — copy them immediately, they can't be recovered
+prints the two passwords -- copy them immediately, they can't be recovered
 later.**
 
 ### 2. Edit `config/server.cnf` if your broker is NOT `sbbu01.local` / `192.168.2.143`
@@ -62,12 +62,12 @@ both a plain (1883) and a TLS (8883) listener, and restarts Mosquitto.
 ### 4. Embed the CA + client cert into the firmware
 
 Copy the PEM contents of three files from `out/` into
-`../../mqtt_certs.h` — into the `mqtt_ca_cert`, `mqtt_client_cert`,
+`../../mqtt_certs.h` -- into the `mqtt_ca_cert`, `mqtt_client_cert`,
 `mqtt_client_key` string constants respectively:
 
-- `out/ca.crt`                 → `mqtt_ca_cert`
-- `out/client_amb82_cam_01.crt` → `mqtt_client_cert`
-- `out/client_amb82_cam_01.key` → `mqtt_client_key`
+- `out/ca.crt`                 -> `mqtt_ca_cert`
+- `out/client_amb82_cam_01.crt` -> `mqtt_client_cert`
+- `out/client_amb82_cam_01.key` -> `mqtt_client_key`
 
 Set `MQTT_USE_TLS 1` in `../../config.h`, put the generated password into
 `MQTT_PASSWORD`, recompile, flash.
@@ -95,7 +95,7 @@ A certificate is a digital document saying "the owner of **this public key**
 is **this identity**". Every cert contains:
 
 - A **public key** (the half that's safe to share)
-- A **subject** (who this cert identifies — e.g. `CN=amb82_cam_01`)
+- A **subject** (who this cert identifies -- e.g. `CN=amb82_cam_01`)
 - A **signature** from the issuer, proving the subject is genuine
 - **Extensions** like `subjectAltName` (other valid names/IPs) and
   `basicConstraints` (whether this cert is allowed to sign other certs)
@@ -109,7 +109,7 @@ challenging them to sign a random value.
 A CA is a cert whose only job is to sign other certs. Its `basicConstraints`
 has `CA:TRUE`, and it has `keyCertSign` in its `keyUsage`. On the public
 internet, CAs are well-known organizations like Let's Encrypt. On a private
-LAN you can run your own — that's what `generate-ca.sh` does.
+LAN you can run your own -- that's what `generate-ca.sh` does.
 
 Browsers and embedded TLS libraries ship with a list of trusted CA certs.
 For a self-signed CA, **you** have to install the CA cert on every client
@@ -121,31 +121,31 @@ that needs to trust it. In this project that's:
 ### The trust chain
 
 ```
-  ca.crt   (self-signed, TRUSTED by all clients — the "anchor")
+  ca.crt   (self-signed, TRUSTED by all clients -- the "anchor")
     │
-    ├── signs → server.crt   (presented by broker during TLS handshake)
+    ├── signs -> server.crt   (presented by broker during TLS handshake)
     │
-    ├── signs → client_amb82_cam_01.crt  (presented by firmware for mTLS)
+    ├── signs -> client_amb82_cam_01.crt  (presented by firmware for mTLS)
     │
-    └── signs → client_recorder.crt      (presented by recorder for mTLS)
+    └── signs -> client_recorder.crt      (presented by recorder for mTLS)
 ```
 
 When the camera opens a TLS connection to the broker, the broker sends
-`server.crt`. The camera walks up the signature chain — "who signed this?"
-→ `ca.crt` → "do I trust this CA?" → yes (it's pinned in `mqtt_certs.h`) →
+`server.crt`. The camera walks up the signature chain -- "who signed this?"
+-> `ca.crt` -> "do I trust this CA?" -> yes (it's pinned in `mqtt_certs.h`) ->
 trust established.
 
 ### TLS vs. mTLS
 
 **TLS** (aka "normal HTTPS-style") authenticates only the server. The client
 verifies `server.crt` against its trusted CA. The server has no idea who
-the client is at the TLS layer — that's handled separately (e.g. by a
+the client is at the TLS layer -- that's handled separately (e.g. by a
 username/password after the handshake).
 
 **Mutual TLS (mTLS)** authenticates both sides. The broker also asks the
 client to present its cert (`require_certificate true` in Mosquitto). Both
 certs are verified against the same CA. This is strong cryptographic
-proof-of-identity — a rogue device without a valid client key cannot even
+proof-of-identity -- a rogue device without a valid client key cannot even
 complete the handshake.
 
 ### Why we layer password auth on top
@@ -154,7 +154,7 @@ Even with mTLS, this project also requires username/password. Why?
 
 - **mTLS proves possession of a key**. If a device is stolen or cloned, the
   attacker gets the key.
-- **Password adds a revocable secondary check** — delete a password file
+- **Password adds a revocable secondary check** -- delete a password file
   entry and that client can no longer connect, even if it still has a valid
   cert.
 - They're cheap and complementary. Belt + suspenders.
@@ -163,13 +163,13 @@ Even with mTLS, this project also requires username/password. Why?
 
 Modern TLS libraries (including mbedTLS, which the AMB82 uses) check the
 connection target (hostname or IP) against the cert's **Subject Alternative
-Name** extension — *not* the old-fashioned `CN` field. This is why
+Name** extension -- *not* the old-fashioned `CN` field. This is why
 `config/server.cnf` lists both `DNS:` and `IP:` entries: any hostname or IP
 a client might connect to must be in that list, or the handshake fails with
 `MBEDTLS_ERR_X509_CERT_VERIFY_FAILED` / `-0x2700`.
 
 > **mbedTLS 2.28 quirk:** the AMB82's TLS stack only matches the SNI
-> hostname string against **DNS** SAN entries — not IP SAN entries. If the
+> hostname string against **DNS** SAN entries -- not IP SAN entries. If the
 > client connects using an IP literal as a hostname, verification fails
 > even if the IP is in the cert. The firmware side works around this by
 > giving PubSubClient an `IPAddress` directly via the IPAddress overload
@@ -189,7 +189,7 @@ a client might connect to must be in that list, or the handshake fails with
 
 The firmware uses **Level 2** security (TLS + mTLS + password, port 8883).
 The broker also keeps a **Level 0** anonymous listener on port 1883 so
-legacy/test clients still work — this is a deliberate compromise for
+legacy/test clients still work -- this is a deliberate compromise for
 backward compatibility in a dev/test setup. In a production deployment,
 remove the plain listener from `/etc/mosquitto/conf.d/secure.conf`.
 
@@ -207,7 +207,7 @@ redeploy recorder certs, restart everything.
 By default `generate-*.sh` sets a 10-year validity. If you hit expiry
 (nice problem to have), rerun the script for whichever cert expired. CA
 expiry means everything must be regenerated. Leaf cert (server/client)
-expiry only affects that one cert — you can reissue it against the same
+expiry only affects that one cert -- you can reissue it against the same
 CA.
 
 **Q: Can I use Let's Encrypt / a real public CA instead?**
@@ -217,12 +217,12 @@ root is already in common trust stores). But mTLS client certs are
 typically still self-signed or issued by a private CA.
 
 **Q: Where should I store `ca.key`?**
-It's the master key — anyone with it can mint new trusted certs. For a
+It's the master key -- anyone with it can mint new trusted certs. For a
 demo/test setup, keeping it in `server/certs/out/` (gitignored) is fine.
 For production, offline storage (encrypted USB, HSM, password manager)
 is the norm.
 
 **Q: The firmware still fails with `-0x2700`.**
-Read `../../findings.md` — there's a specific list of four gotchas that
+Read `../../findings.md` -- there's a specific list of four gotchas that
 cause this on the AMB82 with mbedTLS 2.28, every one of which was hit
 during development and is now documented.

@@ -17,9 +17,9 @@
 #   ./generate-client.sh amb82_cam_02 ./out
 #
 # Output files (in $OUT_DIR, default ./out):
-#   client_<name>.key  — Client private key (SECRET, deploy on client)
-#   client_<name>.crt  — Client certificate (deploy on client)
-#   client_<name>.csr  — CSR (intermediate, can be deleted)
+#   client_<name>.key  -- Client private key (SECRET, deploy on client)
+#   client_<name>.crt  -- Client certificate (deploy on client)
+#   client_<name>.csr  -- CSR (intermediate, can be deleted)
 #
 # Where to use the output:
 # - Camera firmware: copy PEM contents of client_camera.crt + client_camera.key
@@ -65,8 +65,8 @@ MSYS_NO_PATHCONV=1 openssl req -new \
     -out "$(winpath "$CSR")" \
     -subj "/CN=$CLIENT_NAME"
 
-echo "==> Signing client certificate with CA..."
-openssl x509 -req -days 3650 \
+echo "==> Signing client certificate with CA (1-year validity)..."
+openssl x509 -req -days 365 \
     -in "$(winpath "$CSR")" \
     -CA "$(winpath "$OUT_DIR/ca.crt")" \
     -CAkey "$(winpath "$OUT_DIR/ca.key")" \
@@ -83,5 +83,5 @@ echo "Verification:"
 openssl verify -CAfile "$OUT_DIR/ca.crt" "$CRT"
 echo
 echo "Files:"
-echo "  $KEY  (SECRET — belongs to this client only)"
+echo "  $KEY  (SECRET -- belongs to this client only)"
 echo "  $CRT  (presented to broker during mTLS handshake)"

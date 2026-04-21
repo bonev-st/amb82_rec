@@ -8,12 +8,12 @@
 # connect to your broker.
 #
 # Prerequisites:
-#   ./generate-ca.sh (must run first — needs ca.key and ca.crt)
+#   ./generate-ca.sh (must run first -- needs ca.key and ca.crt)
 #
 # Output files (in $OUT_DIR, default ./out):
-#   server.key  — Server private key (deploy to /etc/mosquitto/certs/, SECRET)
-#   server.crt  — Server certificate (deploy to /etc/mosquitto/certs/)
-#   server.csr  — Certificate Signing Request (intermediate, can be deleted)
+#   server.key  -- Server private key (deploy to /etc/mosquitto/certs/, SECRET)
+#   server.crt  -- Server certificate (deploy to /etc/mosquitto/certs/)
+#   server.csr  -- Certificate Signing Request (intermediate, can be deleted)
 #
 # Usage:
 #   ./generate-server.sh
@@ -54,8 +54,8 @@ MSYS_NO_PATHCONV=1 openssl req -new \
     -out "$(winpath "$OUT_DIR/server.csr")" \
     -subj "/CN=$CN"
 
-echo "==> Signing server certificate with CA (SANs from $SAN_CONFIG)..."
-openssl x509 -req -days 3650 \
+echo "==> Signing server certificate with CA (1-year validity, SANs from $SAN_CONFIG)..."
+openssl x509 -req -days 365 \
     -in "$(winpath "$OUT_DIR/server.csr")" \
     -CA "$(winpath "$OUT_DIR/ca.crt")" \
     -CAkey "$(winpath "$OUT_DIR/ca.key")" \
@@ -73,5 +73,5 @@ echo "Verification:"
 openssl verify -CAfile "$OUT_DIR/ca.crt" "$OUT_DIR/server.crt"
 echo
 echo "Files:"
-echo "  $OUT_DIR/server.key  (SECRET — deploy to /etc/mosquitto/certs/)"
+echo "  $OUT_DIR/server.key  (SECRET -- deploy to /etc/mosquitto/certs/)"
 echo "  $OUT_DIR/server.crt  (deploy to /etc/mosquitto/certs/)"
