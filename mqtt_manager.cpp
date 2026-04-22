@@ -242,9 +242,22 @@ bool MqttManager::publishMotionEvent(bool motionActive, const char* rtspUrl) {
             DEVICE_ID, getEpochTime());
     }
 
-    bool ok = _client.publish(MQTT_TOPIC_MOTION, payload);
-    LOGF("[MQTT] Motion: %s (publish=%s)\n",
-         motionActive ? "STARTED" : "STOPPED", ok ? "ok" : "FAIL");
+    // Ameba SDK bug: ServerDrv::sendData() is declared `bool` but returns
+    // the byte count from send_data() -- any non-zero coerces to true=1.
+    // WiFiClient::write() returns that 1 as its byte count, so PubSubClient's
+    // (rc == hlen + length) check becomes (1 == <packet size>) and publish()
+    // returns false even though the bytes actually reached the broker.
+    // Workaround: treat publish()'s false as "can't tell" and use the post-
+    // publish connection state as the source of truth. If the TCP connection
+    // survived the write, the send went out. Note that PubSubClient::connect()
+    // doesn't hit this trap -- it confirms via the broker's CONNACK reply,
+    // not via write()'s return -- so _client.connected() remains reliable.
+    bool reported = _client.publish(MQTT_TOPIC_MOTION, payload);
+    bool ok = reported || _client.connected();
+    LOGF("[MQTT] Motion: %s (publish=%s%s)\n",
+         motionActive ? "STARTED" : "STOPPED",
+         ok ? "ok" : "FAIL",
+         (ok && !reported) ? " [sdk-bogus-false]" : "");
     return ok;
 }
 

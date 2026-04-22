@@ -2,6 +2,7 @@
 /.theia
 /amb82_clips
 /seq
+/cert
 __pycache__
 *.pyc
 

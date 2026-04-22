@@ -11,11 +11,6 @@
 
 #define SERIAL_BAUD 115200
 
-// ---- CHANGE THESE ----
-// #define WIFI_SSID     "xxxx956"
-// #define WIFI_PASSWORD "1RootPass0"
-// -----------------------
-
 #define NTP_SERVER          "pool.ntp.org"
 #define NTP_OFFSET          0       // UTC offset in seconds
 #define NTP_UPDATE_INTERVAL 60000   // ms

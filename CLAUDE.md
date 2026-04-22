@@ -43,6 +43,68 @@ Motion-triggered video recorder for the **Ameba AMB82 Mini** camera board. The c
   recovery) with retain=true, so the server's retained state tracks the
   current battery bucket.
 - Supports both battery and USB-powered operation.
+- **Boot is driven by a linear init state machine in `loop()`**, not in
+  `setup()`. `setup()` only brings up internal peripherals (LEDs, UART,
+  WDT, ADC, NTP UDP socket, TLS cert material). Camera/RTSP/motion
+  detection are NOT started until WiFi -> NTP -> MQTT are all up, so the
+  Ch0 H264 encoder (biggest power draw) never runs while the upload path
+  is unreachable. States: `INIT_WIFI -> INIT_NTP -> INIT_MQTT ->
+  INIT_CAMERA_START -> INIT_CAMERA_WARMUP -> READY`. See `amb82_rec.ino`
+  for handlers; retry cadences and the `BOOT_INIT_TIMEOUT_MS` cold-boot
+  watchdog escalation are in `config.h`.
+
+### Runtime WiFi-loss behavior (Option A, current)
+
+When WiFi drops during `READY` the firmware demotes back to `INIT_WIFI`
+and re-runs NTP + MQTT on recovery (MQTT `pullConfig` re-exchange + fresh
+status publish). **The camera and RTSP server are deliberately left
+running during the outage.** Rationale: the header of `amb82_rec.ino`
+and the note at the top of this file both call out that dynamic Ch0
+stop/start produced stuck/static decoded frames in testing. We have no
+evidence that a cold stop after hours of uptime would be any different,
+so the safe default is to keep the encoder up once it has been started
+once. The power cost is an always-on encoder during runtime outages --
+same order of magnitude as the steady-state cost we already accept.
+
+### Option B (future experiment -- NOT implemented)
+
+If we ever want to claw back the encoder power during outages, the plan
+would be: on demotion out of `READY`, also tear down the camera pipeline:
+
+```cpp
+// in tickReady() demotion path, after setting initState = INIT_WIFI:
+motionDet.end();
+videoToMotion.end();
+videoToRtsp.end();
+rtsp.end();
+Camera.channelEnd(DETECT_CHANNEL);
+Camera.channelEnd(RTSP_CHANNEL);
+cameraStarted = false;   // forces re-entry of INIT_CAMERA_START on recovery
+```
+
+On recovery the existing path (`INIT_MQTT -> INIT_CAMERA_START ->
+INIT_CAMERA_WARMUP -> READY`) re-initializes everything, including the
+8 s motion-detection warm-up. Things to validate before flipping the
+switch:
+
+1. **Stuck-frame regression** -- the original reason Option A exists.
+   Validate RTSP output stays decodable after several stop/start cycles
+   at realistic uptimes (hours, not minutes). Look at the first ~5 s of
+   the first few clips after recovery.
+2. **`Camera.videoInit()` idempotency** -- in Option B it gets called a
+   second time inside `tickInitCameraStart()`. Verify the SDK doesn't
+   leak buffers or crash on repeat.
+3. **`StreamIO::end()` + `registerInput()` reuse** -- confirm the
+   pipeline objects can be re-wired without `end()` leaving them in a
+   half-torn-down state that makes the next `begin()` fail.
+4. **Warm-up cost** -- first motion after each recovery is delayed by
+   `INIT_CAMERA_WARMUP_MS` (8 s). For bursty connectivity this could
+   mean missed events. Might want a shorter warm-up if AE stabilizes
+   faster after the sensor was only briefly off.
+
+If all four check out, the change is a small diff to `tickReady()` plus
+clearing `cameraStarted`. Keep Option A as a compile-time fallback in
+case Option B regresses in the field.
 
 ## Build & Flash
 

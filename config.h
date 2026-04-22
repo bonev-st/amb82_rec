@@ -36,11 +36,45 @@
 #define WIFI_RECONNECT_INTERVAL_MS 10000
 
 // ============================================================
+// Boot Init State Machine
+// ============================================================
+// setup() now only brings up internal peripherals (LEDs, UART, WDT, ADC,
+// RTC, empty NTP UDP socket, TLS cert material). Everything that touches
+// the network or spins up the camera -- WiFi association, NTP sync, MQTT
+// begin, Ch0 H264 + RTSP, Ch3 RGB + motion detection -- is driven by an
+// init state machine in loop() so the camera encoder (biggest power sink)
+// is NOT started until the upload path (MQTT) is proven reachable.
+//
+// BOOT_INIT_TIMEOUT_MS: if cold boot hasn't reached the READY state within
+// this many ms, stop refreshing the WDT so the board reboots clean. Does
+// not apply to runtime re-entry of the init states after a WiFi drop.
+#define BOOT_INIT_TIMEOUT_MS        180000   // 3 minutes
+
+// Per-stage retry cadences. Each init handler only acts when the gate is
+// open; in between it's a cheap timer check so motion-response cadence
+// isn't affected once we reach READY.
+#define INIT_WIFI_RETRY_MS           5000    // spacing between wifiMgr.begin() calls
+#define INIT_NTP_RETRY_MS            5000
+#define INIT_MQTT_RETRY_MS           5000
+
+// Non-TLS only: after this many failed NTP forceUpdate() attempts, give up
+// on NTP for now and advance to MQTT -- timestamps fall back to uptime
+// seconds (see MqttManager::getEpochTime) until NTP eventually recovers.
+// Ignored when MQTT_USE_TLS=1 because TLS handshake requires a real epoch.
+#define INIT_NTP_MAX_ATTEMPTS_NONTLS 5
+
+// Camera warm-up: AE stabilization + motion-detection background model.
+// Previously a blocking delay(8000) in setup(); now runs as a timer in
+// INIT_CAMERA_WARMUP so loop() keeps servicing WDT/LEDs/battery.
+#define INIT_CAMERA_WARMUP_MS       8000
+
+// ============================================================
 // MQTT Configuration (broker/user/password in secrets.h)
 // ============================================================
 
 // MQTT Security: set to 1 for TLS + mTLS on port 8883, 0 for plain on 1883
 #define MQTT_USE_TLS        1
+// #define MQTT_USE_TLS        0
 #if MQTT_USE_TLS
   #define MQTT_PORT         8883
 #else
@@ -86,7 +120,7 @@
   #define DETECT_FPS        10             // 10fps for responsive debugging
 #endif
 #define DETECT_CODEC        VIDEO_RGB      // Must be RGB for MotionDetection
-#define MOTION_DETECT_SENSITIVITY  2       // Trigger when >= N connected motion regions detected
+#define MOTION_DETECT_SENSITIVITY  1       // Trigger when >= N connected motion regions detected
 #define MOTION_POST_ROLL_MS        10000   // Stream 10 seconds after motion ends
 
 // ============================================================
