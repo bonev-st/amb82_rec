@@ -37,7 +37,7 @@ winpath() {
 
 # The server's Common Name (CN). The actual hostname matching happens via
 # SAN entries in server.cnf, but setting CN is still good hygiene.
-CN="sbbu01.local"
+CN="stanimir.local"
 
 if [[ ! -f "$OUT_DIR/ca.key" || ! -f "$OUT_DIR/ca.crt" ]]; then
     echo "ERROR: CA files not found in $OUT_DIR."

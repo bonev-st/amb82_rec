@@ -4,6 +4,25 @@ This folder contains everything needed to generate the certificates used by
 the MQTT broker (Mosquitto) and its clients (the AMB82 camera and the
 recorder service) for **TLS + mTLS + password authentication**.
 
+> **Docker deployments (the supported path):** Do NOT run
+> `install-broker.sh` — it writes directly to `/etc/mosquitto/` and
+> assumes a bare-metal broker. The Docker stack in
+> `../docker-compose.yml` bind-mounts cert files from `./out/`
+> straight into the `mosquitto` container, so the only steps you need
+> are:
+>
+> 1. Edit `config/server.cnf` so the SAN entries match the hostname /
+>    IP your clients will use.
+> 2. Run `./generate-all.sh` (or the individual scripts) on the Docker
+>    host.
+> 3. Create `../.env` (copy `../.env.example`) with the recorder
+>    password that step 2 prints.
+> 4. `cd .. && docker compose up -d` — or use
+>    `../scripts/start.sh` / `install-systemd.sh`.
+>
+> `install-broker.sh` is kept in the repo only as reference for
+> non-Docker setups.
+
 If you just want to get going, skip straight to **[Quick Start](#quick-start)**.
 If you want to understand what's happening, read the **[Theory](#theory-in-five-minutes)**
 section first.

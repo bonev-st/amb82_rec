@@ -6,6 +6,13 @@
 # have an IP SAN; if you connect by hostname, it MUST have a DNS SAN.
 # Edit the entries below for your environment.
 #
+# The firmware on the AMB82 uses setServer(IPAddress), which makes
+# WiFiSSLClient skip SNI hostname matching while still verifying the full
+# chain — so an IP SAN is enough on the device side. DNS SANs matter for
+# the recorder container, which connects to the broker by the compose
+# service name ("mosquitto"), and for host-side `mosquitto_pub/sub`
+# testing on localhost.
+#
 # Usage: this file is passed to `openssl x509 -extfile` when signing the
 # server certificate with the CA. See generate-server.sh.
 
@@ -14,7 +21,15 @@ subjectAltName   = @alt_names
 extendedKeyUsage = serverAuth
 
 [alt_names]
-DNS.1 = sbbu01.local
+# Pi hostname (mDNS + /etc/hosts).
+DNS.1 = stanimir.local
+# Loopback for in-container self-tests with mosquitto_pub/sub.
 DNS.2 = localhost
-IP.1  = 192.168.2.143
+# Docker Compose service name — the recorder container connects to
+# "mosquitto:8883" over the internal network, so the broker cert must
+# include it as a DNS SAN or TLS verification fails.
+DNS.3 = mosquitto
+# wlan0 AP on the Pi — the AMB82 camera connects to this IP literal.
+IP.1  = 10.0.89.1
+# Loopback for host-side testing.
 IP.2  = 127.0.0.1

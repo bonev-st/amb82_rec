@@ -1,0 +1,35 @@
+# Reference systemd unit for the AMB82 Docker stack.
+#
+# This file is a TEMPLATE — the install-systemd.sh script regenerates it
+# at /etc/systemd/system/amb82-stack.service with the actual invoking
+# user, group, and absolute working directory substituted in. The values
+# below assume the canonical layout on the Pi:
+#
+#   user:  stanimir
+#   dir:   /home/stanimir/amb82_rec/server
+#
+# Installing directly (without install-systemd.sh) also works if those
+# assumptions hold. Otherwise run:
+#
+#   sudo ./scripts/install-systemd.sh
+
+[Unit]
+Description=AMB82 Docker stack (mosquitto + recorder + HomeAssistant)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+User=stanimir
+Group=stanimir
+WorkingDirectory=/home/stanimir/amb82_rec/server
+ExecStartPre=/bin/mkdir -p /home/stanimir/amb82_rec/server/mosquitto/data /home/stanimir/amb82_rec/server/mosquitto/log
+ExecStart=/usr/bin/docker compose up -d --remove-orphans
+ExecStop=/usr/bin/docker compose down --remove-orphans
+TimeoutStartSec=180
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

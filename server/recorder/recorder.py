@@ -18,7 +18,8 @@ Environment variables:
     MQTT_TOPIC      - Topic pattern (default: camera/+/motion)
     CLIPS_DIR       - Output directory (default: /clips)
     MAX_DURATION    - Max recording seconds (default: 300)
-    RTSP_STIMEOUT_US - RTSP socket timeout in microseconds (default: 5000000)
+    RTSP_TIMEOUT_US - RTSP socket I/O timeout in microseconds (default: 5000000).
+                      Legacy name RTSP_STIMEOUT_US still honored.
     MIN_CLIP_BYTES  - Drop clips smaller than this as failed (default: 4096)
 """
 
@@ -54,7 +55,8 @@ MQTT_CLIENT_KEY = os.getenv("MQTT_CLIENT_KEY", "")
 MQTT_TOPIC = os.getenv("MQTT_TOPIC", "camera/+/motion")
 CLIPS_DIR = Path(os.getenv("CLIPS_DIR", "/clips"))
 MAX_DURATION = int(os.getenv("MAX_DURATION", "300"))
-RTSP_STIMEOUT_US = int(os.getenv("RTSP_STIMEOUT_US", "5000000"))  # 5s
+RTSP_TIMEOUT_US = int(os.getenv("RTSP_TIMEOUT_US",
+                                os.getenv("RTSP_STIMEOUT_US", "5000000")))  # 5s
 MIN_CLIP_BYTES = int(os.getenv("MIN_CLIP_BYTES", "4096"))
 
 DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -71,14 +73,27 @@ def _drain_stderr_to_file(pipe, log_path: Path):
 
     Running in a dedicated thread. Without this, a full stderr pipe buffer
     will block FFmpeg mid-recording.
+
+    Lazy-opens the file on the first byte so ffmpeg invocations that exit
+    before printing anything (common when a duplicate motion-start kills
+    the previous ffmpeg within milliseconds) don't leave 0-byte log files
+    behind. The parent directory is also created lazily.
     """
+    f = None
     try:
-        with open(log_path, "ab") as f:
-            for line in iter(pipe.readline, b""):
-                f.write(line)
+        for line in iter(pipe.readline, b""):
+            if f is None:
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                f = open(log_path, "ab")
+            f.write(line)
     except Exception as e:  # best-effort
         log.warning("stderr drain failed for %s: %s", log_path, e)
     finally:
+        if f is not None:
+            try:
+                f.close()
+            except Exception:
+                pass
         try:
             pipe.close()
         except Exception:
@@ -104,14 +119,20 @@ def start_recording(device_id: str, rtsp_url: str, mqtt_client):
 
     timestamp = datetime.now().strftime("%H-%M-%S")
     out_path = out_dir / f"{device_id}_{timestamp}.mp4"
-    log_path = out_dir / f"{device_id}_{timestamp}.ffmpeg.log"
+    # FFmpeg stderr logs go into a per-date logs/ subfolder to keep the
+    # clip directory clean. The folder itself is created lazily by the
+    # drain thread if (and only if) ffmpeg actually produces output.
+    log_path = out_dir / "logs" / f"{device_id}_{timestamp}.ffmpeg.log"
 
     cmd = [
         "ffmpeg",
         "-hide_banner",
         "-loglevel", "warning",
         "-rtsp_transport", "tcp",
-        "-stimeout", str(RTSP_STIMEOUT_US),   # fail fast when RTSP stalls
+        # FFmpeg 5+ renamed the RTSP socket timeout from -stimeout to -timeout
+        # (still microseconds). The old name was removed in 7.x and causes
+        # "Unrecognized option 'stimeout'" + exit code 8 before any I/O.
+        "-timeout", str(RTSP_TIMEOUT_US),
         "-i", rtsp_url,
         "-c", "copy",                         # passthrough H264, no re-encode
         "-t", str(MAX_DURATION),              # safety cap

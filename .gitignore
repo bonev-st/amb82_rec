@@ -12,6 +12,13 @@ __pycache__
 # mqtt_certs.h.example for the expected template shape.
 secrets.h
 
+# Docker stack host-side state — never commit runtime data or the
+# recorder password file.
+server/.env
+server/mosquitto/data/
+server/mosquitto/log/
+server/homeassistant/
+
 # Transient planning artifacts
 findings.md
 progress.md
